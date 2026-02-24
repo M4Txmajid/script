@@ -14,16 +14,7 @@ local rootPart = character:WaitForChild("HumanoidRootPart")
 local BRAINROT_PATH = workspace:WaitForChild("ActiveBrainrots")
 local LUCKYBLOCK_PATH = workspace:WaitForChild("ActiveLuckyBlocks")
 local TSUNAMI_PATH = workspace:WaitForChild("ActiveTsunamis")
-
--- Safe mutation path loading
-local MUTATIONS_PATH = nil
-pcall(function()
-    MUTATIONS_PATH = ReplicatedStorage:WaitForChild("Assets", 5)
-    if MUTATIONS_PATH then
-        MUTATIONS_PATH = MUTATIONS_PATH:WaitForChild("Mutations", 5)
-    end
-end)
-
+local MUTATIONS_ASSET_PATH = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Mutations")
 local TWEEN_SPEED = 200
 local TRAVEL_DEPTH = -30
 local GRAB_HEIGHT = 5
@@ -53,16 +44,16 @@ local activeTab = "Brainrot"
 local farmingTab = "Brainrot"
 local brainrotSelectedRarities = {}
 local luckyBlockSelectedRarities = {}
-local mutationSelectedItems = {}
+local mutationSelectedTypes = {}
 local brainrotCheckboxes = {}
 local luckyBlockCheckboxes = {}
 local mutationCheckboxes = {}
 local totalGrabbed = 0
 
 --// Mutation state
-local mutationSpawnEnabled = false
-local activeMutations = {}
-local mutationConnections = {}
+local knownMutationNames = {}
+local mutationEventActive = false
+local mutationNotifText = ""
 
 --// Trial state
 local autoTrialEnabled = false
@@ -91,271 +82,180 @@ local savedTrialSelections = {}
 local savedTrialTab = nil
 local trialAutoSelected = false
 
---// ===================== FORWARD DECLARE ALL UI LABELS ===================== --
-local StatusLabel, PhaseLabel, WaveLabel, GrabLabel
-local MutationHeader, MutationStatusLabel, MutationCountLabel, MutationListLabel
-local TrialHeader, TrialStatusLabel, TrialDetailLabel, TrialCollectLabel
-local TrialTrackerLabel, TrialProgressLabel, TrialDebugLabel
-local SavedPosLabel, LogLabel
-
---// ===================== FORWARD DECLARE UI FUNCTIONS ===================== --
-local updateTrackerLabel
-local updateTrialTimerDisplay
-local updateWaveStatus
-local updateSavedPosLabel
-local switchTab
-
---// ===================== RARITY KEYWORDS ===================== --
+--// ===================== RARITY KEYWORDS (ordered by priority) ===================== --
 local RARITY_KEYWORDS = {
     "divine", "secret", "mythical", "mythic", "legendary",
     "epic", "rare", "uncommon", "common"
 }
 
---// ===================== MUTATION SYSTEM ===================== --
+--// ===================== MUTATION HELPERS ===================== --
 
-local function getMutationsList()
-    local mutations = {}
-    if not MUTATIONS_PATH or not MUTATIONS_PATH.Parent then return mutations end
-    for _, child in pairs(MUTATIONS_PATH:GetChildren()) do
-        table.insert(mutations, {
-            Name = child.Name,
-            Object = child,
-            ClassName = child.ClassName,
-            HasChildren = #child:GetChildren() > 0
-        })
+local function scanMutationAssetTypes()
+    local types = {}
+    if not MUTATIONS_ASSET_PATH or not MUTATIONS_ASSET_PATH.Parent then return types end
+    for _, child in pairs(MUTATIONS_ASSET_PATH:GetChildren()) do
+        table.insert(types, child.Name)
+        knownMutationNames[string.lower(child.Name)] = child.Name
     end
-    table.sort(mutations, function(a, b) return a.Name < b.Name end)
-    return mutations
+    table.sort(types)
+    return types
 end
 
-local function getAllMutationItems()
-    local allItems = {}
-    if not MUTATIONS_PATH or not MUTATIONS_PATH.Parent then return allItems end
-    for _, child in pairs(MUTATIONS_PATH:GetChildren()) do
-        if child:IsA("Folder") or child:IsA("Model") then
-            for _, item in pairs(child:GetChildren()) do
-                table.insert(allItems, {
-                    Name = item.Name,
-                    Object = item,
-                    Category = child.Name,
-                    ClassName = item.ClassName,
-                    FullPath = child.Name .. "/" .. item.Name
-                })
-            end
-        else
-            table.insert(allItems, {
-                Name = child.Name,
-                Object = child,
-                Category = "Root",
-                ClassName = child.ClassName,
-                FullPath = child.Name
-            })
-        end
-    end
-    table.sort(allItems, function(a, b) return a.FullPath < b.FullPath end)
-    return allItems
-end
-
-local function checkBrainrotMutation(brainrot)
-    if not brainrot or not brainrot.Parent then return nil end
-    local mutationName = nil
-    pcall(function()
-        mutationName = brainrot:GetAttribute("Mutation")
-    end)
-    if mutationName then return mutationName end
-    pcall(function()
-        local tags = brainrot:GetTags()
-        for _, tag in ipairs(tags) do
-            local lower = string.lower(tag)
-            if string.find(lower, "mutation") or string.find(lower, "mutant") or string.find(lower, "doom") or string.find(lower, "candy") then
-                mutationName = tag
-            end
-        end
-    end)
-    if mutationName then return mutationName end
-    for _, child in pairs(brainrot:GetDescendants()) do
-        local lower = string.lower(child.Name)
-        if string.find(lower, "mutation") or string.find(lower, "mutant") or string.find(lower, "doom") or string.find(lower, "candy") then
-            mutationName = child.Name
-            break
-        end
-    end
-    return mutationName
-end
-
-local function findMutatedBrainrots(mutationFilter)
+local function findMutationBrainrotsInWorkspace(selectedMutations)
     local results = {}
+
+    -- 1) Check ActiveBrainrots for folders/models matching mutation names
+    for _, child in pairs(BRAINROT_PATH:GetChildren()) do
+        local childLower = string.lower(child.Name)
+        for mutName, _ in pairs(selectedMutations) do
+            if string.find(childLower, string.lower(mutName)) then
+                if child:IsA("Folder") or child:IsA("Model") then
+                    for _, br in pairs(child:GetChildren()) do
+                        local p = br:IsA("Model") and (br.PrimaryPart or br:FindFirstChildWhichIsA("BasePart")) or (br:IsA("BasePart") and br or nil)
+                        if p then
+                            table.insert(results, {Name = br.Name, Rarity = child.Name, Part = p, Object = br, IsMutation = true, MutationType = mutName})
+                        end
+                    end
+                else
+                    local p = child:IsA("Model") and (child.PrimaryPart or child:FindFirstChildWhichIsA("BasePart")) or (child:IsA("BasePart") and child or nil)
+                    if p then
+                        table.insert(results, {Name = child.Name, Rarity = mutName, Part = p, Object = child, IsMutation = true, MutationType = mutName})
+                    end
+                end
+            end
+        end
+    end
+
+    -- 2) Check inside each rarity folder for items with mutation name in them
     for _, folder in pairs(BRAINROT_PATH:GetChildren()) do
         if folder:IsA("Folder") or folder:IsA("Model") then
-            for _, brainrot in pairs(folder:GetChildren()) do
-                local mutation = checkBrainrotMutation(brainrot)
-                if mutation then
-                    if not mutationFilter or string.find(string.lower(mutation), string.lower(mutationFilter)) then
-                        local part = brainrot:IsA("Model") and (brainrot.PrimaryPart or brainrot:FindFirstChildWhichIsA("BasePart")) or (brainrot:IsA("BasePart") and brainrot or nil)
-                        if part then
-                            table.insert(results, {
-                                Name = brainrot.Name,
-                                Mutation = mutation,
-                                Part = part,
-                                Object = brainrot,
-                                Rarity = folder.Name
-                            })
+            for _, br in pairs(folder:GetChildren()) do
+                local brLower = string.lower(br.Name)
+                for mutName, _ in pairs(selectedMutations) do
+                    if string.find(brLower, string.lower(mutName)) then
+                        local p = br:IsA("Model") and (br.PrimaryPart or br:FindFirstChildWhichIsA("BasePart")) or (br:IsA("BasePart") and br or nil)
+                        if p then
+                            -- Avoid duplicates
+                            local isDup = false
+                            for _, existing in ipairs(results) do
+                                if existing.Object == br then isDup = true; break end
+                            end
+                            if not isDup then
+                                table.insert(results, {Name = br.Name, Rarity = folder.Name, Part = p, Object = br, IsMutation = true, MutationType = mutName})
+                            end
                         end
                     end
                 end
             end
         end
     end
-    for _, desc in pairs(workspace:GetDescendants()) do
-        if desc:IsA("Model") or desc:IsA("BasePart") then
-            local lower = string.lower(desc.Name)
-            if string.find(lower, "doom") or string.find(lower, "candy") or string.find(lower, "mutation") or string.find(lower, "mutant") then
-                local part = desc:IsA("Model") and (desc.PrimaryPart or desc:FindFirstChildWhichIsA("BasePart")) or (desc:IsA("BasePart") and desc or nil)
-                if part then
-                    local alreadyFound = false
-                    for _, r in ipairs(results) do
-                        if r.Object == desc then alreadyFound = true; break end
+
+    -- 3) Check workspace broadly for mutation-named containers
+    for mutName, _ in pairs(selectedMutations) do
+        local mutLower = string.lower(mutName)
+        -- Check for dedicated workspace folders like "ActiveCandy", "ActiveDoom", etc.
+        for _, wsChild in pairs(workspace:GetChildren()) do
+            local wsLower = string.lower(wsChild.Name)
+            if string.find(wsLower, mutLower) and (wsChild:IsA("Folder") or wsChild:IsA("Model")) then
+                for _, br in pairs(wsChild:GetDescendants()) do
+                    local p = nil
+                    if br:IsA("Model") then
+                        p = br.PrimaryPart or br:FindFirstChildWhichIsA("BasePart")
+                    elseif br:IsA("BasePart") and not br.Parent:IsA("Model") then
+                        p = br
                     end
-                    if not alreadyFound then
-                        table.insert(results, {
-                            Name = desc.Name,
-                            Mutation = checkBrainrotMutation(desc) or desc.Name,
-                            Part = part,
-                            Object = desc,
-                            Rarity = "Unknown"
-                        })
+                    if p then
+                        local isDup = false
+                        for _, existing in ipairs(results) do
+                            if existing.Object == br then isDup = true; break end
+                        end
+                        if not isDup then
+                            table.insert(results, {Name = br.Name, Rarity = mutName, Part = p, Object = br, IsMutation = true, MutationType = mutName})
+                        end
                     end
                 end
             end
         end
     end
+
     return results
 end
 
-local function cleanMutationList()
-    local cleaned = {}
-    for _, m in ipairs(activeMutations) do
-        if m.Object and m.Object.Parent then
-            table.insert(cleaned, m)
-        end
-    end
-    activeMutations = cleaned
-end
+local function getMutationCount(mutName)
+    local count = 0
+    local mutLower = string.lower(mutName)
 
-local function startMutationMonitor()
-    for _, conn in pairs(mutationConnections) do
-        pcall(function() conn:Disconnect() end)
-    end
-    mutationConnections = {}
-
-    local function onBrainrotAdded(child)
-        if not mutationSpawnEnabled then return end
-        task.wait(0.2)
-        local function checkChild(obj)
-            local mutation = checkBrainrotMutation(obj)
-            if mutation then
-                local isSelected = false
-                for itemName, selected in pairs(mutationSelectedItems) do
-                    if selected then
-                        local mutLower = string.lower(mutation)
-                        if string.find(mutLower, string.lower(itemName)) or string.find(string.lower(itemName), mutLower) then
-                            isSelected = true
-                            break
-                        end
-                    end
-                end
-                if isSelected or next(mutationSelectedItems) == nil then
-                    table.insert(activeMutations, {
-                        Name = obj.Name,
-                        Mutation = mutation,
-                        Object = obj,
-                        SpawnTime = tick()
-                    })
-                    if MutationStatusLabel then
-                        MutationStatusLabel.Text = string.format("🧬 MUTANT SPAWN: %s (%s)", obj.Name, mutation)
-                        MutationStatusLabel.TextColor3 = Color3.fromRGB(255, 0, 255)
-                    end
-                    if MutationCountLabel then
-                        MutationCountLabel.Text = string.format("Active Mutants: %d", #activeMutations)
-                        MutationCountLabel.TextColor3 = Color3.fromRGB(0, 255, 200)
-                    end
-                end
+    -- Count in ActiveBrainrots
+    for _, child in pairs(BRAINROT_PATH:GetChildren()) do
+        if string.find(string.lower(child.Name), mutLower) then
+            if child:IsA("Folder") or child:IsA("Model") then
+                count = count + #child:GetChildren()
+            else
+                count = count + 1
             end
         end
         if child:IsA("Folder") or child:IsA("Model") then
-            for _, subChild in pairs(child:GetChildren()) do
-                checkChild(subChild)
-            end
-            local subConn = child.ChildAdded:Connect(function(subChild)
-                task.wait(0.1)
-                checkChild(subChild)
-            end)
-            table.insert(mutationConnections, subConn)
-        else
-            checkChild(child)
-        end
-    end
-
-    for _, folder in pairs(BRAINROT_PATH:GetChildren()) do
-        if folder:IsA("Folder") then
-            local conn = folder.ChildAdded:Connect(function(child)
-                task.wait(0.2)
-                local mutation = checkBrainrotMutation(child)
-                if mutation and mutationSpawnEnabled then
-                    table.insert(activeMutations, {
-                        Name = child.Name,
-                        Mutation = mutation,
-                        Object = child,
-                        SpawnTime = tick()
-                    })
-                    if MutationStatusLabel then
-                        MutationStatusLabel.Text = string.format("🧬 NEW: %s [%s]", child.Name, mutation)
-                        MutationStatusLabel.TextColor3 = Color3.fromRGB(255, 50, 255)
-                    end
-                end
-            end)
-            table.insert(mutationConnections, conn)
-        end
-    end
-
-    local mainConn = BRAINROT_PATH.ChildAdded:Connect(function(child)
-        task.wait(0.3)
-        onBrainrotAdded(child)
-    end)
-    table.insert(mutationConnections, mainConn)
-
-    local wsConn = workspace.DescendantAdded:Connect(function(desc)
-        if not mutationSpawnEnabled then return end
-        task.wait(0.3)
-        local lower = string.lower(desc.Name)
-        if string.find(lower, "doom") or string.find(lower, "candy") or string.find(lower, "mutation") or string.find(lower, "mutant") then
-            local part = desc:IsA("Model") and (desc.PrimaryPart or desc:FindFirstChildWhichIsA("BasePart")) or (desc:IsA("BasePart") and desc or nil)
-            if part then
-                table.insert(activeMutations, {
-                    Name = desc.Name,
-                    Mutation = desc.Name,
-                    Object = desc,
-                    SpawnTime = tick()
-                })
-                if MutationStatusLabel then
-                    MutationStatusLabel.Text = string.format("🧬 DETECT: %s", desc.Name)
-                    MutationStatusLabel.TextColor3 = Color3.fromRGB(255, 100, 0)
-                end
-                if MutationCountLabel then
-                    MutationCountLabel.Text = string.format("Active Mutants: %d", #activeMutations)
+            for _, br in pairs(child:GetChildren()) do
+                if string.find(string.lower(br.Name), mutLower) then
+                    count = count + 1
                 end
             end
         end
-    end)
-    table.insert(mutationConnections, wsConn)
+    end
+
+    -- Count in workspace mutation folders
+    for _, wsChild in pairs(workspace:GetChildren()) do
+        if string.find(string.lower(wsChild.Name), mutLower) and (wsChild:IsA("Folder") or wsChild:IsA("Model")) then
+            for _, desc in pairs(wsChild:GetDescendants()) do
+                if desc:IsA("Model") or (desc:IsA("BasePart") and not desc.Parent:IsA("Model")) then
+                    count = count + 1
+                end
+            end
+        end
+    end
+
+    return count
 end
 
-local function stopMutationMonitor()
-    for _, conn in pairs(mutationConnections) do
-        pcall(function() conn:Disconnect() end)
+local function detectMutationEvents()
+    local found = {}
+    -- Check ActiveBrainrots for mutation-named folders
+    for _, child in pairs(BRAINROT_PATH:GetChildren()) do
+        local childLower = string.lower(child.Name)
+        for mutLower, mutName in pairs(knownMutationNames) do
+            if string.find(childLower, mutLower) then
+                found[mutName] = true
+            end
+        end
     end
-    mutationConnections = {}
-    activeMutations = {}
+
+    -- Check workspace for mutation folders
+    for _, wsChild in pairs(workspace:GetChildren()) do
+        local wsLower = string.lower(wsChild.Name)
+        for mutLower, mutName in pairs(knownMutationNames) do
+            if string.find(wsLower, mutLower) and (wsChild:IsA("Folder") or wsChild:IsA("Model")) then
+                if #wsChild:GetChildren() > 0 then
+                    found[mutName] = true
+                end
+            end
+        end
+    end
+
+    -- Check inside brainrot rarity folders for mutation items
+    for _, folder in pairs(BRAINROT_PATH:GetChildren()) do
+        if folder:IsA("Folder") or folder:IsA("Model") then
+            for _, br in pairs(folder:GetChildren()) do
+                local brLower = string.lower(br.Name)
+                for mutLower, mutName in pairs(knownMutationNames) do
+                    if string.find(brLower, mutLower) then
+                        found[mutName] = true
+                    end
+                end
+            end
+        end
+    end
+
+    return found
 end
 
 --// ===================== TOWER PATH HELPERS ===================== --
@@ -380,7 +280,7 @@ local function getProximityPrompt()
     return (ok and p and p:IsA("ProximityPrompt")) and p or nil
 end
 
---// ===================== BILLBOARD SCANNER ===================== --
+--// ===================== IMPROVED BILLBOARD SCANNER ===================== --
 
 local function extractRarityFromText(text)
     if not text or #text == 0 then return nil, nil end
@@ -392,6 +292,25 @@ local function extractRarityFromText(text)
     if string.find(lower, "waiting") and not string.find(lower, "bring") then return nil, nil end
     if lower:match("^%s*%d+%s*$") then return nil, nil end
     if lower:match("^%s*%d+:%d+%s*$") then return nil, nil end
+
+    -- Check for mutation keywords first
+    for mutLower, mutName in pairs(knownMutationNames) do
+        if string.find(lower, mutLower) then
+            local count = nil
+            count = count or tonumber(lower:match("(%d+)%s+" .. mutLower))
+            count = count or tonumber(lower:match(mutLower .. "%s*x?(%d+)"))
+            count = count or tonumber(lower:match("x(%d+)"))
+            count = count or tonumber(lower:match("%((%d+)%)"))
+            if not count then
+                for num in lower:gmatch("(%d+)") do
+                    local n = tonumber(num)
+                    if n and n >= 1 and n <= 50 then count = n; break end
+                end
+            end
+            return mutLower, count or 1
+        end
+    end
+
     for _, keyword in ipairs(RARITY_KEYWORDS) do
         if string.find(lower, keyword) then
             local count = nil
@@ -461,13 +380,21 @@ local function scanTrialFromBillboard()
                 if text and #text > 2 then
                     local lower = string.lower(text)
                     local isTrialRelated = false
-                    if string.find(lower, "trial") or string.find(lower, "bring") or string.find(lower, "collect") or string.find(lower, "tsunami") or string.find(lower, "deliver") then isTrialRelated = true end
+                    if string.find(lower, "trial") then isTrialRelated = true end
+                    if string.find(lower, "bring") then isTrialRelated = true end
+                    if string.find(lower, "collect") then isTrialRelated = true end
+                    if string.find(lower, "tsunami") then isTrialRelated = true end
+                    if string.find(lower, "deliver") then isTrialRelated = true end
                     if string.find(lower, "need") and string.find(lower, "brainrot") then isTrialRelated = true end
+                    -- Check for mutation keywords
+                    for mutLower, _ in pairs(knownMutationNames) do
+                        if string.find(lower, mutLower) then isTrialRelated = true; break end
+                    end
                     if not isTrialRelated then
                         local p = desc.Parent
                         while p and p ~= playerGui do
                             local pn = string.lower(p.Name)
-                            if string.find(pn, "trial") or string.find(pn, "tsunami") or string.find(pn, "tower") or string.find(pn, "quest") then isTrialRelated = true; break end
+                            if string.find(pn, "trial") or string.find(pn, "tsunami") or string.find(pn, "tower") or string.find(pn, "quest") or string.find(pn, "mutation") then isTrialRelated = true; break end
                             p = p.Parent
                         end
                     end
@@ -538,6 +465,17 @@ end
 local function matchRarityToFolder(keyword)
     if not keyword then return nil end
     local lower = string.lower(keyword)
+
+    -- Check if it's a mutation type
+    if knownMutationNames[lower] then
+        -- Look for matching folder in ActiveBrainrots
+        for _, child in pairs(BRAINROT_PATH:GetChildren()) do
+            if string.find(string.lower(child.Name), lower) then return child.Name end
+        end
+        -- Return the mutation name itself if no folder match
+        return knownMutationNames[lower]
+    end
+
     for _, child in pairs(BRAINROT_PATH:GetChildren()) do
         if (child:IsA("Folder") or child:IsA("Model")) then
             if string.lower(child.Name) == lower then return child.Name end
@@ -576,6 +514,13 @@ local function autoSelectTrialRarity(folderName)
     if brainrotCheckboxes[folderName] then
         brainrotSelectedRarities[folderName] = true
         brainrotCheckboxes[folderName].Check.Text = "★"; brainrotCheckboxes[folderName].Check.BackgroundColor3 = Color3.fromRGB(0, 160, 255); brainrotCheckboxes[folderName].Check.TextColor3 = Color3.fromRGB(255, 255, 0)
+        return true
+    end
+    -- If it's a mutation, also check mutation checkboxes
+    if mutationCheckboxes[folderName] then
+        mutationSelectedTypes[folderName] = true
+        mutationCheckboxes[folderName].Check.Text = "★"
+        mutationCheckboxes[folderName].Check.BackgroundColor3 = Color3.fromRGB(0, 160, 255)
         return true
     end
     return false
@@ -620,7 +565,13 @@ local function trackerRescanAtTower()
     return newRarity, newCount, "same", debugInfo
 end
 
---// ===================== CONTINUOUS TRACKER ===================== --
+--// Forward declarations for labels used in tracker
+local TrialCollectLabel, TrialDetailLabel, TrialDebugLabel, TrialProgressLabel, TrialTrackerLabel, MutationEventLabel
+
+--// ===================== CONTINUOUS BACKGROUND TRACKER ===================== --
+
+local function updateTrackerLabel() end -- forward declare, defined after GUI
+local function updateTrialTimerDisplay() end -- forward declare
 
 local function startContinuousTracker()
     if continuousTrackerRunning then return end
@@ -664,17 +615,8 @@ local function startContinuousTracker()
                         TrialDebugLabel.Text = string.format("#%d: no result", trackerScanCount)
                     end
                 end
-                if updateTrackerLabel then updateTrackerLabel() end
-                if updateTrialTimerDisplay then updateTrialTimerDisplay() end
+                updateTrackerLabel(); updateTrialTimerDisplay()
             end
-
-            if mutationSpawnEnabled then
-                cleanMutationList()
-                if MutationCountLabel then
-                    MutationCountLabel.Text = string.format("Active Mutants: %d", #activeMutations)
-                end
-            end
-
             for i = 1, math.floor(TRACKER_INTERVAL / 0.5) do
                 if not autoTrialEnabled or not continuousTrackerRunning then break end; task.wait(0.5)
             end
@@ -977,7 +919,7 @@ end
 local function hasSelectedRarities(tab)
     tab = tab or activeTab
     if tab == "Brainrot" then for _ in pairs(brainrotSelectedRarities) do return true end
-    elseif tab == "Mutations" then for _ in pairs(mutationSelectedItems) do return true end
+    elseif tab == "Mutations" then for _ in pairs(mutationSelectedTypes) do return true end
     else for _ in pairs(luckyBlockSelectedRarities) do return true end end
     return false
 end
@@ -988,22 +930,7 @@ local function getTargets(tab)
         local sel = {}; for n in pairs(brainrotSelectedRarities) do table.insert(sel, n) end
         return #sel > 0 and getBrainrots(sel) or {}
     elseif tab == "Mutations" then
-        local targets = {}
-        for itemName, selected in pairs(mutationSelectedItems) do
-            if selected then
-                local mutated = findMutatedBrainrots(itemName)
-                for _, m in ipairs(mutated) do
-                    table.insert(targets, m)
-                end
-            end
-        end
-        if #targets == 0 and next(mutationSelectedItems) then
-            local allMutated = findMutatedBrainrots(nil)
-            for _, m in ipairs(allMutated) do
-                table.insert(targets, m)
-            end
-        end
-        return targets
+        return findMutationBrainrotsInWorkspace(mutationSelectedTypes)
     else
         return getLuckyBlocks(luckyBlockSelectedRarities)
     end
@@ -1017,7 +944,7 @@ pcall(function() ScreenGui.Parent = game:GetService("CoreGui") end)
 if not ScreenGui.Parent then ScreenGui.Parent = player:WaitForChild("PlayerGui") end
 
 local guiWidth = isMobile and 200 or 310
-local guiHeight = isMobile and 440 or 780
+local guiHeight = isMobile and 400 or 720
 local fontSize = isMobile and 8 or 12
 local btnHeight = isMobile and 26 or 34
 local checkHeight = isMobile and 24 or 32
@@ -1071,10 +998,7 @@ MinBtn.MouseButton1Click:Connect(function()
     MainFrame.Size = minimized and UDim2.new(0, guiWidth, 0, dragH) or UDim2.new(0, guiWidth, 0, guiHeight)
     MinBtn.Text = minimized and "+" or "_"
 end)
-CloseBtn.MouseButton1Click:Connect(function()
-    stopMutationMonitor()
-    ScreenGui:Destroy()
-end)
+CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
 
 --// ===================== CONTENT LAYOUT ===================== --
 
@@ -1090,28 +1014,25 @@ local function makeLabel(text, height, color, fSize)
     l.TextWrapped = true; l.Parent = contentFrame; yOff = yOff + height + 2; return l
 end
 
--- NOW create all UI labels
-StatusLabel = makeLabel("Status: Idle", lh, Color3.fromRGB(180,180,180))
-PhaseLabel = makeLabel("Phase: --", lhs, Color3.fromRGB(100,180,255), fontSize-1)
-WaveLabel = makeLabel("Waves: Safe", lhs, Color3.fromRGB(100,255,100), fontSize-1)
-GrabLabel = makeLabel("Grabbed: 0", lhs, Color3.fromRGB(100,255,100))
+local StatusLabel = makeLabel("Status: Idle", lh, Color3.fromRGB(180,180,180))
+local PhaseLabel = makeLabel("Phase: --", lhs, Color3.fromRGB(100,180,255), fontSize-1)
+local WaveLabel = makeLabel("Waves: Safe", lhs, Color3.fromRGB(100,255,100), fontSize-1)
+local GrabLabel = makeLabel("Grabbed: 0", lhs, Color3.fromRGB(100,255,100))
 
-MutationHeader = makeLabel("═══ MUTATIONS ═══", lh, Color3.fromRGB(255, 0, 200))
-MutationStatusLabel = makeLabel("🧬 Mutations: Idle", lhs, Color3.fromRGB(200, 100, 255), fontSize-1)
-MutationCountLabel = makeLabel("Active Mutants: 0", lhs, Color3.fromRGB(180, 180, 180), fontSize-1)
-MutationListLabel = makeLabel("Loaded: Scanning...", lhx, Color3.fromRGB(150, 150, 180), fontSize-2)
+--// Mutation Event Notification Label
+MutationEventLabel = makeLabel("🧬 Mutations: Scanning...", lhs, Color3.fromRGB(255, 100, 255), fontSize-1)
 
-TrialHeader = makeLabel("═══ TRIAL ═══", lh, Color3.fromRGB(0,200,255))
-TrialStatusLabel = makeLabel("Trial: OFF", lh, Color3.fromRGB(180,180,180))
+local TrialHeader = makeLabel("═══ TRIAL ═══", lh, Color3.fromRGB(0,200,255))
+local TrialStatusLabel = makeLabel("Trial: OFF", lh, Color3.fromRGB(180,180,180))
 TrialDetailLabel = makeLabel("Requirement: --", lhs, Color3.fromRGB(0,200,255), fontSize-1)
 TrialCollectLabel = makeLabel("Collecting: --", lhs, Color3.fromRGB(255,255,0), fontSize-1)
 TrialTrackerLabel = makeLabel("Tracker: Idle", lhs, Color3.fromRGB(255,150,255), fontSize-1)
 TrialProgressLabel = makeLabel("Progress: 0/0", lhs, Color3.fromRGB(0,255,100), fontSize-1)
 TrialDebugLabel = makeLabel("Debug: --", lhx, Color3.fromRGB(120,120,150), fontSize-2)
-SavedPosLabel = makeLabel("Saved Pos: None", lhx, Color3.fromRGB(255,180,80), fontSize-2)
 
--- NOW implement the real UI functions
-updateSavedPosLabel = function()
+local SavedPosLabel = makeLabel("Saved Pos: None", lhx, Color3.fromRGB(255,180,80), fontSize-2)
+
+local function updateSavedPosLabel()
     if savedCFrame then
         local p = savedCFrame.Position
         SavedPosLabel.Text = string.format("Saved: X:%.0f Y:%.0f Z:%.0f", p.X, p.Y, p.Z)
@@ -1119,8 +1040,8 @@ updateSavedPosLabel = function()
     else SavedPosLabel.Text = "Saved Pos: None"; SavedPosLabel.TextColor3 = Color3.fromRGB(255,180,80) end
 end
 
+-- Now define the real updateTrackerLabel
 updateTrackerLabel = function()
-    if not TrialTrackerLabel then return end
     if currentTrialRarity and currentTrialFolder then
         local changeInfo = ""
         if rarityChangeCount > 0 then
@@ -1137,8 +1058,7 @@ updateTrackerLabel = function()
     end
 end
 
-updateWaveStatus = function(pos)
-    if not WaveLabel then return end
+local function updateWaveStatus(pos)
     local dist = getClosestWaveDistance(pos or (rootPart and rootPart.Position or Vector3.zero))
     if dist < WAVE_SAFE_DISTANCE then WaveLabel.Text = string.format("WAVE! (%.0f)", dist); WaveLabel.TextColor3 = Color3.fromRGB(255,60,60)
     elseif dist < WAVE_SAFE_DISTANCE*2 then WaveLabel.Text = string.format("Wave near (%.0f)", dist); WaveLabel.TextColor3 = Color3.fromRGB(255,200,60)
@@ -1146,7 +1066,6 @@ updateWaveStatus = function(pos)
 end
 
 updateTrialTimerDisplay = function()
-    if not TrialDebugLabel then return end
     local active, timerText = isTrialTimerActive()
     if active then TrialDebugLabel.Text = "Timer: " .. timerText
     else
@@ -1156,6 +1075,31 @@ updateTrialTimerDisplay = function()
     end
 end
 
+local function updateMutationEventLabel()
+    local activeMuts = detectMutationEvents()
+    local names = {}
+    for name, _ in pairs(activeMuts) do table.insert(names, name) end
+    table.sort(names)
+    if #names > 0 then
+        mutationEventActive = true
+        mutationNotifText = table.concat(names, ", ")
+        MutationEventLabel.Text = "🧬 ACTIVE: " .. mutationNotifText
+        MutationEventLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+    else
+        mutationEventActive = false
+        mutationNotifText = ""
+        MutationEventLabel.Text = "🧬 Mutations: None active"
+        MutationEventLabel.TextColor3 = Color3.fromRGB(150, 100, 150)
+    end
+
+    -- Update mutation checkbox counts
+    for name, data in pairs(mutationCheckboxes) do
+        data.CountLabel.Text = tostring(getMutationCount(name))
+    end
+end
+
+local switchTab
+
 --// ===================== TAB BAR (3 TABS) ===================== --
 
 local tabBarFrame = Instance.new("Frame"); tabBarFrame.Size = UDim2.new(1, -16, 0, isMobile and 22 or 30)
@@ -1163,27 +1107,28 @@ tabBarFrame.Position = UDim2.new(0, 8, 0, yOff)
 tabBarFrame.BackgroundColor3 = Color3.fromRGB(18,18,28); tabBarFrame.BorderSizePixel = 0; tabBarFrame.Parent = contentFrame
 Instance.new("UICorner", tabBarFrame).CornerRadius = UDim.new(0, 6); yOff = yOff + (isMobile and 25 or 33)
 
-local brainrotTabBtn = Instance.new("TextButton"); brainrotTabBtn.Size = UDim2.new(0.333, -2, 1, -4)
+local brainrotTabBtn = Instance.new("TextButton"); brainrotTabBtn.Size = UDim2.new(0.333, -3, 1, -4)
 brainrotTabBtn.Position = UDim2.new(0, 2, 0, 2); brainrotTabBtn.BackgroundColor3 = Color3.fromRGB(100,60,200)
 brainrotTabBtn.BorderSizePixel = 0; brainrotTabBtn.Text = "Brainrot"; brainrotTabBtn.TextColor3 = Color3.new(1,1,1)
-brainrotTabBtn.TextSize = isMobile and 8 or 11; brainrotTabBtn.Font = Enum.Font.GothamBold; brainrotTabBtn.Parent = tabBarFrame
+brainrotTabBtn.TextSize = isMobile and 8 or 12; brainrotTabBtn.Font = Enum.Font.GothamBold; brainrotTabBtn.Parent = tabBarFrame
 Instance.new("UICorner", brainrotTabBtn).CornerRadius = UDim.new(0, 6)
 
-local luckyBlockTabBtn = Instance.new("TextButton"); luckyBlockTabBtn.Size = UDim2.new(0.333, -2, 1, -4)
+local luckyBlockTabBtn = Instance.new("TextButton"); luckyBlockTabBtn.Size = UDim2.new(0.333, -3, 1, -4)
 luckyBlockTabBtn.Position = UDim2.new(0.333, 1, 0, 2); luckyBlockTabBtn.BackgroundColor3 = Color3.fromRGB(40,40,60)
 luckyBlockTabBtn.BorderSizePixel = 0; luckyBlockTabBtn.Text = "Lucky"; luckyBlockTabBtn.TextColor3 = Color3.fromRGB(150,150,150)
-luckyBlockTabBtn.TextSize = isMobile and 8 or 11; luckyBlockTabBtn.Font = Enum.Font.GothamBold; luckyBlockTabBtn.Parent = tabBarFrame
+luckyBlockTabBtn.TextSize = isMobile and 8 or 12; luckyBlockTabBtn.Font = Enum.Font.GothamBold; luckyBlockTabBtn.Parent = tabBarFrame
 Instance.new("UICorner", luckyBlockTabBtn).CornerRadius = UDim.new(0, 6)
 
-local mutationTabBtn = Instance.new("TextButton"); mutationTabBtn.Size = UDim2.new(0.333, -2, 1, -4)
+local mutationTabBtn = Instance.new("TextButton"); mutationTabBtn.Size = UDim2.new(0.333, -3, 1, -4)
 mutationTabBtn.Position = UDim2.new(0.666, 1, 0, 2); mutationTabBtn.BackgroundColor3 = Color3.fromRGB(40,40,60)
-mutationTabBtn.BorderSizePixel = 0; mutationTabBtn.Text = "Mutate"; mutationTabBtn.TextColor3 = Color3.fromRGB(150,150,150)
-mutationTabBtn.TextSize = isMobile and 8 or 11; mutationTabBtn.Font = Enum.Font.GothamBold; mutationTabBtn.Parent = tabBarFrame
+mutationTabBtn.BorderSizePixel = 0; mutationTabBtn.Text = "Mutations"; mutationTabBtn.TextColor3 = Color3.fromRGB(150,150,150)
+mutationTabBtn.TextSize = isMobile and 8 or 12; mutationTabBtn.Font = Enum.Font.GothamBold; mutationTabBtn.Parent = tabBarFrame
 Instance.new("UICorner", mutationTabBtn).CornerRadius = UDim.new(0, 6)
 
 --// ===================== SCROLL FRAMES ===================== --
 
 local scrollH = isMobile and 60 or 120
+
 local BrainrotScrollFrame = Instance.new("ScrollingFrame"); BrainrotScrollFrame.Size = UDim2.new(1, -16, 0, scrollH)
 BrainrotScrollFrame.Position = UDim2.new(0, 8, 0, yOff); BrainrotScrollFrame.BackgroundColor3 = Color3.fromRGB(18,18,28)
 BrainrotScrollFrame.BorderSizePixel = 0; BrainrotScrollFrame.ScrollBarThickness = isMobile and 4 or 6
@@ -1207,30 +1152,36 @@ local lp = Instance.new("UIPadding", LuckyBlockScrollFrame); lp.PaddingTop = UDi
 local MutationScrollFrame = Instance.new("ScrollingFrame"); MutationScrollFrame.Size = UDim2.new(1, -16, 0, scrollH)
 MutationScrollFrame.Position = UDim2.new(0, 8, 0, yOff); MutationScrollFrame.BackgroundColor3 = Color3.fromRGB(18,18,28)
 MutationScrollFrame.BorderSizePixel = 0; MutationScrollFrame.ScrollBarThickness = isMobile and 4 or 6
-MutationScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(255,0,200); MutationScrollFrame.CanvasSize = UDim2.new(0,0,0,0)
+MutationScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(255,100,255); MutationScrollFrame.CanvasSize = UDim2.new(0,0,0,0)
 MutationScrollFrame.ElasticBehavior = Enum.ElasticBehavior.Always; MutationScrollFrame.ScrollingDirection = Enum.ScrollingDirection.Y
 MutationScrollFrame.Visible = false; MutationScrollFrame.Parent = contentFrame
 Instance.new("UICorner", MutationScrollFrame).CornerRadius = UDim.new(0, 6)
 local mll = Instance.new("UIListLayout", MutationScrollFrame); mll.Padding = UDim.new(0, isMobile and 2 or 3); mll.SortOrder = Enum.SortOrder.LayoutOrder
-local mpad = Instance.new("UIPadding", MutationScrollFrame); mpad.PaddingTop = UDim.new(0,3); mpad.PaddingLeft = UDim.new(0,3); mpad.PaddingRight = UDim.new(0,3)
+local mp = Instance.new("UIPadding", MutationScrollFrame); mp.PaddingTop = UDim.new(0,3); mp.PaddingLeft = UDim.new(0,3); mp.PaddingRight = UDim.new(0,3)
 
 yOff = yOff + scrollH + 4
 
 switchTab = function(tab)
     activeTab = tab
+    -- Reset all tabs to inactive
     brainrotTabBtn.BackgroundColor3 = Color3.fromRGB(40,40,60); brainrotTabBtn.TextColor3 = Color3.fromRGB(150,150,150)
     luckyBlockTabBtn.BackgroundColor3 = Color3.fromRGB(40,40,60); luckyBlockTabBtn.TextColor3 = Color3.fromRGB(150,150,150)
     mutationTabBtn.BackgroundColor3 = Color3.fromRGB(40,40,60); mutationTabBtn.TextColor3 = Color3.fromRGB(150,150,150)
     BrainrotScrollFrame.Visible = false; LuckyBlockScrollFrame.Visible = false; MutationScrollFrame.Visible = false
+
     if tab == "Brainrot" then
         brainrotTabBtn.BackgroundColor3 = Color3.fromRGB(100,60,200); brainrotTabBtn.TextColor3 = Color3.new(1,1,1)
-        BrainrotScrollFrame.Visible = true; Title.Text = "Brainrot TP"; uiStroke.Color = Color3.fromRGB(100,60,200)
+        BrainrotScrollFrame.Visible = true
+        Title.Text = "Brainrot TP"; uiStroke.Color = Color3.fromRGB(100,60,200)
     elseif tab == "LuckyBlocks" then
         luckyBlockTabBtn.BackgroundColor3 = Color3.fromRGB(200,160,0); luckyBlockTabBtn.TextColor3 = Color3.new(1,1,1)
-        LuckyBlockScrollFrame.Visible = true; Title.Text = "Lucky Block TP"; uiStroke.Color = Color3.fromRGB(200,160,0)
+        LuckyBlockScrollFrame.Visible = true
+        Title.Text = "Lucky Block TP"; uiStroke.Color = Color3.fromRGB(200,160,0)
     elseif tab == "Mutations" then
-        mutationTabBtn.BackgroundColor3 = Color3.fromRGB(255,0,200); mutationTabBtn.TextColor3 = Color3.new(1,1,1)
-        MutationScrollFrame.Visible = true; Title.Text = "Mutations"; uiStroke.Color = Color3.fromRGB(255,0,200)
+        mutationTabBtn.BackgroundColor3 = Color3.fromRGB(200,50,200); mutationTabBtn.TextColor3 = Color3.new(1,1,1)
+        MutationScrollFrame.Visible = true
+        Title.Text = "Mutation TP"; uiStroke.Color = Color3.fromRGB(200,50,200)
+        updateMutationEventLabel()
     end
 end
 brainrotTabBtn.MouseButton1Click:Connect(function() switchTab("Brainrot") end)
@@ -1242,19 +1193,26 @@ mutationTabBtn.MouseButton1Click:Connect(function() switchTab("Mutations") end)
 local RARITY_ORDER_C = {{"uncommon",Color3.fromRGB(80,200,80)},{"common",Color3.fromRGB(180,180,180)},{"rare",Color3.fromRGB(60,120,255)},
     {"epic",Color3.fromRGB(180,60,255)},{"legendary",Color3.fromRGB(255,180,0)},{"mythic",Color3.fromRGB(255,50,50)},
     {"secret",Color3.fromRGB(255,0,100)},{"divine",Color3.fromRGB(255,220,100)}}
-local function getRarityColor(n) local l = string.lower(n); for _, p in ipairs(RARITY_ORDER_C) do if string.find(l, p[1]) then return p[2] end end; return Color3.fromRGB(200,200,200) end
 
 local MUTATION_COLORS = {
-    doom = Color3.fromRGB(180, 0, 0), candy = Color3.fromRGB(255, 100, 200),
-    ice = Color3.fromRGB(100, 200, 255), fire = Color3.fromRGB(255, 120, 0),
-    shadow = Color3.fromRGB(80, 0, 160), golden = Color3.fromRGB(255, 215, 0),
-    rainbow = Color3.fromRGB(255, 100, 255), toxic = Color3.fromRGB(0, 200, 0),
-    crystal = Color3.fromRGB(150, 220, 255), dark = Color3.fromRGB(60, 0, 100),
+    {"candy", Color3.fromRGB(255, 120, 200)},
+    {"doom", Color3.fromRGB(180, 0, 0)},
+    {"ice", Color3.fromRGB(100, 200, 255)},
+    {"fire", Color3.fromRGB(255, 100, 0)},
+    {"golden", Color3.fromRGB(255, 215, 0)},
+    {"shadow", Color3.fromRGB(80, 0, 120)},
+    {"neon", Color3.fromRGB(0, 255, 150)},
+    {"crystal", Color3.fromRGB(180, 220, 255)},
+    {"toxic", Color3.fromRGB(100, 255, 0)},
+    {"electric", Color3.fromRGB(255, 255, 0)},
 }
-local function getMutationColor(name)
-    local lower = string.lower(name)
-    for key, color in pairs(MUTATION_COLORS) do if string.find(lower, key) then return color end end
-    return Color3.fromRGB(200, 100, 255)
+
+local function getRarityColor(n) local l = string.lower(n); for _, p in ipairs(RARITY_ORDER_C) do if string.find(l, p[1]) then return p[2] end end; return Color3.fromRGB(200,200,200) end
+
+local function getMutationColor(n)
+    local l = string.lower(n)
+    for _, p in ipairs(MUTATION_COLORS) do if string.find(l, p[1]) then return p[2] end end
+    return Color3.fromRGB(200, 100, 255) -- default mutation purple
 end
 
 --// ===================== CHECKBOXES ===================== --
@@ -1304,29 +1262,39 @@ local function createLuckyBlockCheckbox(rn, idx)
     luckyBlockCheckboxes[rn] = {Button=btn, Check=ck, CountLabel=cl}
 end
 
-local function createMutationCheckbox(itemName, category, idx)
+local function createMutationCheckbox(mutName, idx)
     local btn = Instance.new("TextButton"); btn.Size = UDim2.new(1, -6, 0, checkHeight); btn.BackgroundColor3 = Color3.fromRGB(35,25,45)
     btn.BorderSizePixel = 0; btn.Text = ""; btn.LayoutOrder = idx; btn.Parent = MutationScrollFrame
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     local ckSize = checkHeight - (isMobile and 6 or 8)
     local ck = Instance.new("TextLabel"); ck.Size = UDim2.new(0, ckSize, 0, ckSize)
-    ck.Position = UDim2.new(0, 4, 0.5, -ckSize/2); ck.BackgroundColor3 = Color3.fromRGB(60,30,80)
+    ck.Position = UDim2.new(0, 4, 0.5, -ckSize/2); ck.BackgroundColor3 = Color3.fromRGB(60,30,70)
     ck.BorderSizePixel = 0; ck.Text = ""; ck.TextSize = isMobile and 10 or 14; ck.TextColor3 = Color3.fromRGB(255,100,255)
     ck.Font = Enum.Font.GothamBold; ck.Parent = btn; Instance.new("UICorner", ck).CornerRadius = UDim.new(0, 4)
-    local displayName = category ~= "Root" and string.format("%s/%s", category, itemName) or itemName
-    local lb = Instance.new("TextLabel"); lb.Size = UDim2.new(1, -40, 1, 0); lb.Position = UDim2.new(0, checkHeight, 0, 0)
-    lb.BackgroundTransparency = 1; lb.Text = displayName; lb.TextColor3 = getMutationColor(itemName)
-    lb.TextSize = isMobile and 8 or 11; lb.Font = Enum.Font.GothamSemibold; lb.TextXAlignment = Enum.TextXAlignment.Left
-    lb.TextWrapped = true; lb.Parent = btn
-    local fullKey = category .. "/" .. itemName
+
+    local mutColor = getMutationColor(mutName)
+    local lb = Instance.new("TextLabel"); lb.Size = UDim2.new(1, -60, 1, 0); lb.Position = UDim2.new(0, checkHeight, 0, 0)
+    lb.BackgroundTransparency = 1; lb.Text = "🧬 " .. mutName; lb.TextColor3 = mutColor; lb.TextSize = isMobile and 9 or 13
+    lb.Font = Enum.Font.GothamSemibold; lb.TextXAlignment = Enum.TextXAlignment.Left; lb.Parent = btn
+
+    local cl = Instance.new("TextLabel"); cl.Size = UDim2.new(0, 26, 1, 0); cl.Position = UDim2.new(1, -28, 0, 0)
+    cl.BackgroundTransparency = 1; cl.TextColor3 = Color3.fromRGB(140,140,140); cl.TextSize = isMobile and 8 or 11
+    cl.Font = Enum.Font.Gotham; cl.Parent = btn; cl.Text = tostring(getMutationCount(mutName))
+
+    -- Active indicator
+    local activeInd = Instance.new("Frame"); activeInd.Size = UDim2.new(0, 6, 0, 6)
+    activeInd.Position = UDim2.new(1, -36, 0.5, -3); activeInd.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    activeInd.BorderSizePixel = 0; activeInd.Parent = btn
+    Instance.new("UICorner", activeInd).CornerRadius = UDim.new(1, 0)
+
     btn.MouseButton1Click:Connect(function()
-        if mutationSelectedItems[fullKey] then
-            mutationSelectedItems[fullKey] = nil; ck.Text = ""; ck.BackgroundColor3 = Color3.fromRGB(60,30,80)
+        if mutationSelectedTypes[mutName] then
+            mutationSelectedTypes[mutName] = nil; ck.Text = ""; ck.BackgroundColor3 = Color3.fromRGB(60,30,70)
         else
-            mutationSelectedItems[fullKey] = true; ck.Text = "M"; ck.BackgroundColor3 = Color3.fromRGB(120,0,160)
+            mutationSelectedTypes[mutName] = true; ck.Text = "🧬"; ck.BackgroundColor3 = Color3.fromRGB(120,0,120)
         end
     end)
-    mutationCheckboxes[fullKey] = {Button=btn, Check=ck, Label=lb}
+    mutationCheckboxes[mutName] = {Button=btn, Check=ck, CountLabel=cl, Label=lb, ActiveIndicator=activeInd}
 end
 
 --// ===================== SLIDERS ===================== --
@@ -1388,29 +1356,6 @@ createToggle("Auto Return", true, Color3.fromRGB(100,255,180), function(v) autoR
 local waveCheckEnabled = true
 createToggle("Wave Safety", true, Color3.fromRGB(255,100,100), function(v) waveCheckEnabled = v end)
 
-createToggle("Mutation Monitor", false, Color3.fromRGB(255,0,200), function(v)
-    mutationSpawnEnabled = v
-    if v then
-        startMutationMonitor()
-        MutationStatusLabel.Text = "Monitor: ACTIVE"
-        MutationStatusLabel.TextColor3 = Color3.fromRGB(0,255,200)
-        local allItems = getAllMutationItems()
-        MutationListLabel.Text = string.format("Loaded: %d mutations from RS", #allItems)
-        MutationListLabel.TextColor3 = Color3.fromRGB(100,255,180)
-        local existing = findMutatedBrainrots(nil)
-        if #existing > 0 then
-            MutationCountLabel.Text = string.format("Found %d mutated!", #existing)
-            MutationCountLabel.TextColor3 = Color3.fromRGB(255,200,0)
-        end
-    else
-        stopMutationMonitor()
-        MutationStatusLabel.Text = "Monitor: OFF"
-        MutationStatusLabel.TextColor3 = Color3.fromRGB(180,180,180)
-        MutationCountLabel.Text = "Active Mutants: 0"
-        MutationCountLabel.TextColor3 = Color3.fromRGB(180,180,180)
-    end
-end)
-
 --// ===================== PICK UP 1 BRAINROT ===================== --
 
 local function pickupOneBrainrot(target)
@@ -1455,13 +1400,6 @@ local function pickupOneBrainrot(target)
     end
     TrialCollectLabel.Text = "GRAB: " .. target.Name
     TrialCollectLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
-    local mutation = checkBrainrotMutation(target.Object)
-    if mutation then
-        TrialCollectLabel.Text = string.format("GRAB MUTANT: %s [%s]", target.Name, mutation)
-        TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 0, 255)
-        MutationStatusLabel.Text = string.format("Grabbed: %s", mutation)
-        MutationStatusLabel.TextColor3 = Color3.fromRGB(0, 255, 200)
-    end
     grabAllPrompts(target.Object)
     grabNearbyPrompts(targetPos, 15)
     pcall(function()
@@ -1485,70 +1423,110 @@ end
 
 local function stopAutoTrial()
     autoTrialEnabled = false; autoTrialRunning = false; trialInProgress = false; trialCollecting = false
-    stopTween(); stopContinuousTracker(); resetRarityTracker(); restorePreviousSelections()
+    stopTween()
+    stopContinuousTracker()
+    resetRarityTracker()
+    restorePreviousSelections()
     if savedTrialTab then switchTab(savedTrialTab); savedTrialTab = nil end
     if rootPart and rootPart.Parent then
-        rootPart.Velocity = Vector3.zero; rootPart.AssemblyLinearVelocity = Vector3.zero; rootPart.AssemblyAngularVelocity = Vector3.zero
+        rootPart.Velocity = Vector3.zero
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
     end
-    if not running then unlockPhysics(); disableNoclip() end
+    if not running then
+        unlockPhysics()
+        disableNoclip()
+    end
     TrialStatusLabel.Text = "Trial: OFF"; TrialStatusLabel.TextColor3 = Color3.fromRGB(180,180,180)
     TrialDetailLabel.Text = "Requirement: --"
     TrialCollectLabel.Text = "Collecting: --"; TrialCollectLabel.TextColor3 = Color3.fromRGB(255,255,0)
     TrialTrackerLabel.Text = "Tracker: Idle"; TrialTrackerLabel.TextColor3 = Color3.fromRGB(255,150,255)
-    TrialProgressLabel.Text = "Progress: 0/0"; TrialDebugLabel.Text = "Debug: --"
+    TrialProgressLabel.Text = "Progress: 0/0"
+    TrialDebugLabel.Text = "Debug: --"
 end
 
 local function doOneTrialRun()
     trialInProgress = true; trialGrabbed = 0; trialCollecting = false
     resetRarityTracker()
-    TrialStatusLabel.Text = "Trial: Starting..."; TrialStatusLabel.TextColor3 = Color3.fromRGB(255,200,0)
-    TrialCollectLabel.Text = "Preparing..."; TrialTrackerLabel.Text = "Tracker: Init..."
-    enableNoclip(); lockPhysics(); saveCurrentSelections(); switchTab("Brainrot")
+    TrialStatusLabel.Text = "Trial: Starting..."
+    TrialStatusLabel.TextColor3 = Color3.fromRGB(255,200,0)
+    TrialCollectLabel.Text = "Preparing..."
+    TrialTrackerLabel.Text = "Tracker: Init..."
+    enableNoclip(); lockPhysics()
+    saveCurrentSelections()
+    switchTab("Brainrot")
     TrialDetailLabel.Text = "Going to tower..."
-    travelToTower(); task.wait(0.3); updateTrialTimerDisplay()
+    travelToTower()
+    task.wait(0.3)
+    updateTrialTimerDisplay()
     local onCd, cdText = isTrialOnCooldown()
     if onCd then
-        TrialStatusLabel.Text = "Trial: Cooldown"; TrialDetailLabel.Text = "CD: " .. cdText
+        TrialStatusLabel.Text = "Trial: Cooldown"
+        TrialDetailLabel.Text = "CD: " .. cdText
         TrialCollectLabel.Text = "Waiting for CD..."
-        restorePreviousSelections(); trialInProgress = false; return false, "cooldown"
+        restorePreviousSelections()
+        trialInProgress = false
+        return false, "cooldown"
     end
     local timerActive = isTrialTimerActive()
     if not timerActive then
         TrialDetailLabel.Text = "Starting trial..."
-        fireTrialPrompt(); task.wait(1.5); updateTrialTimerDisplay()
+        fireTrialPrompt()
+        task.wait(1.5)
+        updateTrialTimerDisplay()
     end
-    TrialDetailLabel.Text = "Scanning..."; task.wait(0.5)
+    TrialDetailLabel.Text = "Scanning..."
+    task.wait(0.5)
     local detectedRarity, detectedCount, sourceText, debugInfo = scanWithRetry(6, 0.4)
     if not detectedRarity then
-        TrialStatusLabel.Text = "Trial: Can't detect!"; TrialDetailLabel.Text = "No rarity found"
-        TrialCollectLabel.Text = "FAILED"; TrialCollectLabel.TextColor3 = Color3.fromRGB(255,60,60)
+        TrialStatusLabel.Text = "Trial: Can't detect!"
+        TrialDetailLabel.Text = "No rarity found"
+        TrialCollectLabel.Text = "FAILED"
+        TrialCollectLabel.TextColor3 = Color3.fromRGB(255,60,60)
         TrialDebugLabel.Text = debugInfo or "no debug"
-        restorePreviousSelections(); trialInProgress = false; return false, "no_rarity"
+        restorePreviousSelections()
+        trialInProgress = false
+        return false, "no_rarity"
     end
     local folderName = matchRarityToFolder(detectedRarity)
     if not folderName then
         TrialStatusLabel.Text = "Trial: No folder '" .. detectedRarity .. "'"
-        TrialCollectLabel.Text = "No folder"; TrialCollectLabel.TextColor3 = Color3.fromRGB(255,120,0)
+        TrialCollectLabel.Text = "No folder"
+        TrialCollectLabel.TextColor3 = Color3.fromRGB(255,120,0)
         TrialDebugLabel.Text = debugInfo or "no debug"
-        restorePreviousSelections(); trialInProgress = false; return false, "no_folder"
+        restorePreviousSelections()
+        trialInProgress = false
+        return false, "no_folder"
     end
-    currentTrialRarity = detectedRarity; currentTrialFolder = folderName
-    trialRequired = detectedCount or 1; trialCollecting = true
+    currentTrialRarity = detectedRarity
+    currentTrialFolder = folderName
+    trialRequired = detectedCount or 1
+    trialCollecting = true
     autoSelectTrialRarity(folderName)
     TrialStatusLabel.Text = string.format("Need %d %s", trialRequired, folderName)
     TrialStatusLabel.TextColor3 = Color3.fromRGB(0,255,100)
     TrialDetailLabel.Text = string.format("★%s (%s)", folderName, detectedRarity)
-    TrialCollectLabel.Text = string.format("Batch: %d", TRIAL_BATCH_SIZE); TrialCollectLabel.TextColor3 = Color3.fromRGB(0,255,100)
+    TrialCollectLabel.Text = string.format("Batch: %d", TRIAL_BATCH_SIZE)
+    TrialCollectLabel.TextColor3 = Color3.fromRGB(0,255,100)
     TrialProgressLabel.Text = string.format("Got:0 Need:%d %s", trialRequired, folderName)
-    updateTrackerLabel(); startContinuousTracker()
+    updateTrackerLabel()
+    startContinuousTracker()
     local trialStart = tick()
     while autoTrialEnabled and (tick() - trialStart) < TRIAL_TIME_LIMIT do
         refreshChar()
         local remaining = math.ceil(TRIAL_TIME_LIMIT - (tick() - trialStart))
         TrialStatusLabel.Text = string.format("★%s★ [%ds]", currentTrialFolder, remaining)
         TrialStatusLabel.TextColor3 = Color3.fromRGB(0,200,255)
-        updateTrialTimerDisplay(); updateTrackerLabel()
+        updateTrialTimerDisplay()
+        updateTrackerLabel()
         local initialTargets = getBrainrots({currentTrialFolder})
+
+        -- Also check mutations if the trial folder matches a mutation
+        if #initialTargets == 0 and knownMutationNames[string.lower(currentTrialFolder)] then
+            local mutTargets = findMutationBrainrotsInWorkspace({[currentTrialFolder] = true})
+            for _, mt in ipairs(mutTargets) do table.insert(initialTargets, mt) end
+        end
+
         if #initialTargets == 0 then
             TrialCollectLabel.Text = "No " .. currentTrialFolder .. " waiting..."
             TrialCollectLabel.TextColor3 = Color3.fromRGB(255,200,0)
@@ -1557,10 +1535,13 @@ local function doOneTrialRun()
             if not timerOk then
                 local checkR = scanTrialFromBillboard()
                 if not checkR then
-                    TrialStatusLabel.Text = "COMPLETED!"; TrialStatusLabel.TextColor3 = Color3.fromRGB(0,255,0)
-                    TrialCollectLabel.Text = "ALL DONE!"; TrialCollectLabel.TextColor3 = Color3.fromRGB(0,255,0)
-                    stopContinuousTracker(); restorePreviousSelections()
-                    trialInProgress = false; trialCollecting = false; return true, "completed"
+                    TrialStatusLabel.Text = "COMPLETED!"
+                    TrialStatusLabel.TextColor3 = Color3.fromRGB(0,255,0)
+                    TrialCollectLabel.Text = "ALL DONE!"
+                    TrialCollectLabel.TextColor3 = Color3.fromRGB(0,255,0)
+                    stopContinuousTracker()
+                    restorePreviousSelections(); trialInProgress = false; trialCollecting = false
+                    return true, "completed"
                 end
             end
             continue
@@ -1574,6 +1555,11 @@ local function doOneTrialRun()
             if (tick() - trialStart) >= TRIAL_TIME_LIMIT then break end
             refreshChar()
             local batchTargets = getBrainrots({currentTrialFolder})
+            -- Also include mutation targets
+            if knownMutationNames[string.lower(currentTrialFolder)] then
+                local mutTargets = findMutationBrainrotsInWorkspace({[currentTrialFolder] = true})
+                for _, mt in ipairs(mutTargets) do table.insert(batchTargets, mt) end
+            end
             if #batchTargets == 0 then
                 if batchCollected > 0 then
                     TrialCollectLabel.Text = string.format("No more (got %d/%d)", batchCollected, TRIAL_BATCH_SIZE)
@@ -1606,24 +1592,31 @@ local function doOneTrialRun()
             task.wait(0.1)
         end
         if batchCollected > 0 then
-            TrialCollectLabel.Text = string.format("Deliver %d...", batchCollected); TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+            TrialCollectLabel.Text = string.format("Deliver %d...", batchCollected)
+            TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
             TrialProgressLabel.Text = string.format("Got:%d Deliver %d...", trialGrabbed, batchCollected)
-            travelToTower(); task.wait(0.2)
+            travelToTower()
+            task.wait(0.2)
             TrialCollectLabel.Text = string.format("Delivering %d...", batchCollected)
             for deliverNum = 1, batchCollected + 1 do
                 fireTrialPrompt(); task.wait(0.3)
                 if not autoTrialEnabled then break end
             end
             if not autoTrialEnabled then break end
-            TrialCollectLabel.Text = "Re-scanning..."; TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+            TrialCollectLabel.Text = "Re-scanning..."
+            TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
             local newR, newC, scanStatus, scanDebug = trackerRescanAtTower()
             if scanStatus == "completed" then
-                TrialStatusLabel.Text = "COMPLETED!"; TrialStatusLabel.TextColor3 = Color3.fromRGB(0,255,0)
-                TrialCollectLabel.Text = string.format("DONE! %d got, %d swaps", trialGrabbed, rarityChangeCount); TrialCollectLabel.TextColor3 = Color3.fromRGB(0,255,0)
-                TrialTrackerLabel.Text = string.format("COMPLETE! (%d swaps)", rarityChangeCount); TrialTrackerLabel.TextColor3 = Color3.fromRGB(0,255,0)
+                TrialStatusLabel.Text = "COMPLETED!"
+                TrialStatusLabel.TextColor3 = Color3.fromRGB(0,255,0)
+                TrialCollectLabel.Text = string.format("DONE! %d got, %d swaps", trialGrabbed, rarityChangeCount)
+                TrialCollectLabel.TextColor3 = Color3.fromRGB(0,255,0)
+                TrialTrackerLabel.Text = string.format("COMPLETE! (%d swaps)", rarityChangeCount)
+                TrialTrackerLabel.TextColor3 = Color3.fromRGB(0,255,0)
                 TrialProgressLabel.Text = string.format("DONE: %d total", trialGrabbed)
-                stopContinuousTracker(); restorePreviousSelections()
-                trialInProgress = false; trialCollecting = false; return true, "completed"
+                stopContinuousTracker()
+                restorePreviousSelections(); trialInProgress = false; trialCollecting = false
+                return true, "completed"
             elseif scanStatus == "changed" then
                 TrialCollectLabel.Text = string.format("⚡%s→%s⚡", previousTrialRarity or "?", currentTrialFolder)
                 TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 50, 255)
@@ -1631,37 +1624,46 @@ local function doOneTrialRun()
                 TrialDetailLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
                 TrialProgressLabel.Text = string.format("Got:%d Now:%s", trialGrabbed, currentTrialFolder)
                 TrialDebugLabel.Text = string.format("Swap#%d: %s→%s", rarityChangeCount, previousTrialRarity or "?", currentTrialRarity)
-                updateTrackerLabel(); task.wait(0.3)
+                updateTrackerLabel()
+                task.wait(0.3)
             elseif scanStatus == "same" then
                 trialRequired = newC or 1
-                TrialCollectLabel.Text = string.format("Need %s (%d left)", currentTrialFolder, trialRequired); TrialCollectLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+                TrialCollectLabel.Text = string.format("Need %s (%d left)", currentTrialFolder, trialRequired)
+                TrialCollectLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
                 TrialDetailLabel.Text = string.format("★Continue: %d %s", trialRequired, currentTrialFolder)
                 TrialProgressLabel.Text = string.format("Got:%d Need:%d %s", trialGrabbed, trialRequired, currentTrialFolder)
                 updateTrackerLabel()
             elseif scanStatus == "no_folder" then
-                TrialCollectLabel.Text = "No folder: " .. (newR or "?"); TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 120, 0)
+                TrialCollectLabel.Text = "No folder: " .. (newR or "?")
+                TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 120, 0)
                 TrialDebugLabel.Text = "Missing: " .. (newR or "?")
             end
         else
-            TrialCollectLabel.Text = "Failed grab, retry..."; TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 100, 0)
+            TrialCollectLabel.Text = "Failed grab, retry..."
+            TrialCollectLabel.TextColor3 = Color3.fromRGB(255, 100, 0)
             task.wait(0.5)
         end
         if not autoTrialEnabled then break end
         task.wait(0.2)
     end
     stopContinuousTracker()
-    TrialStatusLabel.Text = "Trial: Time up"; TrialStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
-    TrialCollectLabel.Text = string.format("End: %d got, %d swaps", trialGrabbed, rarityChangeCount); TrialCollectLabel.TextColor3 = Color3.fromRGB(200,200,200)
+    TrialStatusLabel.Text = "Trial: Time up"
+    TrialStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
+    TrialCollectLabel.Text = string.format("End: %d got, %d swaps", trialGrabbed, rarityChangeCount)
+    TrialCollectLabel.TextColor3 = Color3.fromRGB(200,200,200)
     TrialTrackerLabel.Text = string.format("Done (%d swaps)", rarityChangeCount)
-    restorePreviousSelections(); trialInProgress = false; trialCollecting = false
+    restorePreviousSelections()
+    trialInProgress = false; trialCollecting = false
     return true, "timeout"
 end
 
 local function startAutoTrialLoop()
     if autoTrialRunning then return end
     autoTrialEnabled = true; autoTrialRunning = true
-    TrialStatusLabel.Text = "Trial: ACTIVE"; TrialStatusLabel.TextColor3 = Color3.fromRGB(0,200,255)
-    TrialCollectLabel.Text = "Starting..."; TrialCollectLabel.TextColor3 = Color3.fromRGB(255,255,0)
+    TrialStatusLabel.Text = "Trial: ACTIVE"
+    TrialStatusLabel.TextColor3 = Color3.fromRGB(0,200,255)
+    TrialCollectLabel.Text = "Starting..."
+    TrialCollectLabel.TextColor3 = Color3.fromRGB(255,255,0)
     TrialTrackerLabel.Text = "Tracker: Starting..."
     if not savedCFrame then saveCurrentPosition(); updateSavedPosLabel() end
     task.spawn(function()
@@ -1681,13 +1683,17 @@ local function startAutoTrialLoop()
             local waitTime = reason == "cooldown" and 30 or TRIAL_COOLDOWN_WAIT
             for i = waitTime, 1, -1 do
                 if not autoTrialEnabled then break end
-                TrialStatusLabel.Text = string.format("Next in %ds", i); TrialStatusLabel.TextColor3 = Color3.fromRGB(100,180,255)
-                TrialCollectLabel.Text = "Waiting..."; TrialCollectLabel.TextColor3 = Color3.fromRGB(150,150,150)
+                TrialStatusLabel.Text = string.format("Next in %ds", i)
+                TrialStatusLabel.TextColor3 = Color3.fromRGB(100,180,255)
+                TrialCollectLabel.Text = "Waiting..."
+                TrialCollectLabel.TextColor3 = Color3.fromRGB(150,150,150)
                 TrialTrackerLabel.Text = "Idle (cooldown)"
-                updateTrialTimerDisplay(); task.wait(1)
+                updateTrialTimerDisplay()
+                task.wait(1)
             end
         end
-        autoTrialRunning = false; stopContinuousTracker()
+        autoTrialRunning = false
+        stopContinuousTracker()
         if not running then unlockPhysics(); disableNoclip() end
         TrialStatusLabel.Text = "Trial: OFF"
         TrialCollectLabel.Text = "Collecting: --"
@@ -1727,57 +1733,9 @@ row4.BackgroundTransparency = 1; row4.Parent = contentFrame; yOff += btnHeight +
 local ScanTrialBtn = createButton("SCAN", Color3.fromRGB(0,150,200)); ScanTrialBtn.Size = UDim2.new(0.48,0,1,0); ScanTrialBtn.Position = UDim2.new(0,0,0,0); ScanTrialBtn.Parent = row4
 local GoTowerBtn = createButton("TOWER", Color3.fromRGB(180,100,0)); GoTowerBtn.Size = UDim2.new(0.48,0,1,0); GoTowerBtn.Position = UDim2.new(0.52,0,0,0); GoTowerBtn.Parent = row4
 
-local row5 = Instance.new("Frame"); row5.Size = UDim2.new(1, -16, 0, btnHeight); row5.Position = UDim2.new(0, 8, 0, yOff)
-row5.BackgroundTransparency = 1; row5.Parent = contentFrame; yOff += btnHeight + (isMobile and 2 or 3)
-local ScanMutBtn = createButton("SCAN MUT", Color3.fromRGB(160,0,200)); ScanMutBtn.Size = UDim2.new(0.48,0,1,0); ScanMutBtn.Position = UDim2.new(0,0,0,0); ScanMutBtn.Parent = row5
-local ListMutBtn = createButton("LIST ALL", Color3.fromRGB(120,0,180)); ListMutBtn.Size = UDim2.new(0.48,0,1,0); ListMutBtn.Position = UDim2.new(0.52,0,0,0); ListMutBtn.Parent = row5
-
-ScanMutBtn.MouseButton1Click:Connect(function()
-    MutationStatusLabel.Text = "Scanning mutations..."
-    MutationStatusLabel.TextColor3 = Color3.fromRGB(255,255,0)
-    task.spawn(function()
-        local allItems = getAllMutationItems()
-        MutationListLabel.Text = string.format("RS Mutations: %d items", #allItems)
-        local mutated = findMutatedBrainrots(nil)
-        cleanMutationList()
-        if #mutated > 0 then
-            local names = {}
-            for i, m in ipairs(mutated) do if i <= 5 then table.insert(names, m.Name) end end
-            MutationStatusLabel.Text = string.format("Found %d mutated!", #mutated)
-            MutationStatusLabel.TextColor3 = Color3.fromRGB(0,255,200)
-            MutationCountLabel.Text = string.format("Mutants: %s%s", table.concat(names, ", "), #mutated > 5 and "..." or "")
-            MutationCountLabel.TextColor3 = Color3.fromRGB(255,200,0)
-        else
-            MutationStatusLabel.Text = "No mutated brainrots found"
-            MutationStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
-            MutationCountLabel.Text = "Active Mutants: 0"
-        end
-        ScanMutBtn.BackgroundColor3 = Color3.fromRGB(0,200,100)
-        task.delay(1, function() ScanMutBtn.BackgroundColor3 = Color3.fromRGB(160,0,200) end)
-    end)
-end)
-
-ListMutBtn.MouseButton1Click:Connect(function()
-    MutationStatusLabel.Text = "Loading mutation list..."
-    MutationStatusLabel.TextColor3 = Color3.fromRGB(255,200,0)
-    task.spawn(function()
-        local allItems = getAllMutationItems()
-        local categories = {}
-        for _, item in ipairs(allItems) do categories[item.Category] = (categories[item.Category] or 0) + 1 end
-        local catList = {}
-        for cat, count in pairs(categories) do table.insert(catList, string.format("%s(%d)", cat, count)) end
-        MutationListLabel.Text = string.format("%d items: %s", #allItems, table.concat(catList, ", "))
-        MutationListLabel.TextColor3 = Color3.fromRGB(200,100,255)
-        MutationStatusLabel.Text = string.format("%d mutations loaded", #allItems)
-        MutationStatusLabel.TextColor3 = Color3.fromRGB(0,255,200)
-        ListMutBtn.BackgroundColor3 = Color3.fromRGB(0,200,100)
-        task.delay(1, function() ListMutBtn.BackgroundColor3 = Color3.fromRGB(120,0,180) end)
-    end)
-end)
-
 ScanTrialBtn.MouseButton1Click:Connect(function()
     TrialDetailLabel.Text = "Scanning..."
-    local r, c, t, dbg = scanWithRetry(4, 0.3)
+    local r, c, t, debug = scanWithRetry(4, 0.3)
     if r then
         local folder = matchRarityToFolder(r)
         TrialDetailLabel.Text = string.format("Need:%d %s→%s", c or 1, r, folder or "NONE")
@@ -1786,7 +1744,7 @@ ScanTrialBtn.MouseButton1Click:Connect(function()
     else
         TrialDetailLabel.Text = "No rarity found!"
         TrialDetailLabel.TextColor3 = Color3.fromRGB(255,80,80)
-        TrialDebugLabel.Text = dbg or "none"
+        TrialDebugLabel.Text = debug or "none"
     end
     updateTrialTimerDisplay()
 end)
@@ -1797,8 +1755,11 @@ GoTowerBtn.MouseButton1Click:Connect(function()
     TrialDetailLabel.Text = "Going to tower..."
     task.spawn(function()
         enableNoclip(); lockPhysics()
-        travelToTower(); task.wait(0.3); fireTrialPrompt(); updateTrialTimerDisplay()
-        TrialDetailLabel.Text = "At tower - scanning..."; task.wait(0.5)
+        travelToTower(); task.wait(0.3)
+        fireTrialPrompt()
+        updateTrialTimerDisplay()
+        TrialDetailLabel.Text = "At tower - scanning..."
+        task.wait(0.5)
         local r, c, t = scanWithRetry(4, 0.3)
         if r then
             local folder = matchRarityToFolder(r)
@@ -1817,7 +1778,7 @@ local LogFrame = Instance.new("Frame"); LogFrame.Size = UDim2.new(1, -16, 0, isM
 LogFrame.Position = UDim2.new(0, 8, 0, yOff)
 LogFrame.BackgroundColor3 = Color3.fromRGB(18,18,28); LogFrame.BorderSizePixel = 0; LogFrame.Parent = contentFrame
 Instance.new("UICorner", LogFrame).CornerRadius = UDim.new(0, 6)
-LogLabel = Instance.new("TextLabel"); LogLabel.Size = UDim2.new(1, -8, 1, 0); LogLabel.Position = UDim2.new(0, 4, 0, 0)
+local LogLabel = Instance.new("TextLabel"); LogLabel.Size = UDim2.new(1, -8, 1, 0); LogLabel.Position = UDim2.new(0, 4, 0, 0)
 LogLabel.BackgroundTransparency = 1; LogLabel.Text = "Last: --"; LogLabel.TextColor3 = Color3.fromRGB(130,130,160)
 LogLabel.TextSize = isMobile and 7 or 10; LogLabel.Font = Enum.Font.Gotham; LogLabel.TextXAlignment = Enum.TextXAlignment.Left
 LogLabel.TextWrapped = true; LogLabel.Parent = LogFrame; yOff += (isMobile and 26 or 34)
@@ -1852,26 +1813,21 @@ local function refreshLuckyBlockRarities()
         LuckyBlockScrollFrame.CanvasSize = UDim2.new(0,0,0,l.AbsoluteContentSize.Y+8) end; return #r
 end
 
-local function refreshMutations()
+local function refreshMutationTypes()
     for _, d in pairs(mutationCheckboxes) do d.Button:Destroy() end; mutationCheckboxes = {}
-    local allItems = getAllMutationItems()
-    for i, item in ipairs(allItems) do createMutationCheckbox(item.Name, item.Category, i) end
+    local types = scanMutationAssetTypes()
+    for i, n in ipairs(types) do createMutationCheckbox(n, i) end
     local l = MutationScrollFrame:FindFirstChildOfClass("UIListLayout")
-    if l then
-        l:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-            MutationScrollFrame.CanvasSize = UDim2.new(0,0,0,l.AbsoluteContentSize.Y+8) end)
-        MutationScrollFrame.CanvasSize = UDim2.new(0,0,0,l.AbsoluteContentSize.Y+8)
-    end
-    if MutationListLabel then
-        MutationListLabel.Text = string.format("Loaded: %d mutations", #allItems)
-        MutationListLabel.TextColor3 = Color3.fromRGB(200,100,255)
-    end
-    return #allItems
+    if l then l:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        MutationScrollFrame.CanvasSize = UDim2.new(0,0,0,l.AbsoluteContentSize.Y+8) end)
+        MutationScrollFrame.CanvasSize = UDim2.new(0,0,0,l.AbsoluteContentSize.Y+8) end
+    updateMutationEventLabel()
+    return #types
 end
 
 local function refreshActiveTab()
     if activeTab == "Brainrot" then StatusLabel.Text = "Found "..refreshBrainrotFolders().." folders"
-    elseif activeTab == "Mutations" then StatusLabel.Text = "Found "..refreshMutations().." mutations"
+    elseif activeTab == "Mutations" then StatusLabel.Text = "Found "..refreshMutationTypes().." mutations"
     else StatusLabel.Text = "Found "..refreshLuckyBlockRarities().." rarities" end
 end
 
@@ -1891,7 +1847,12 @@ local function startFarming()
                 if not running or trialInProgress or trialCollecting then break end
                 if not target.Part or not target.Part.Parent or not target.Object or not target.Object.Parent then continue end
                 refreshChar(); local tp = target.Part.CFrame.Position
-                PhaseLabel.Text = "Travel -> "..target.Name; StatusLabel.Text = "[".. (target.Rarity or target.Mutation or "?") .."] "..target.Name
+
+                local isMut = target.IsMutation
+                local displayName = isMut and ("🧬" .. target.Name) or target.Name
+                PhaseLabel.Text = "Travel -> " .. displayName
+                StatusLabel.Text = "[" .. target.Rarity .. "] " .. displayName
+
                 if not smoothTween(CFrame.new(tp.X, tp.Y+TRAVEL_DEPTH, tp.Z), TWEEN_SPEED) or not running then continue end; task.wait(0.05)
                 if waveCheckEnabled and target.Part and target.Part.Parent then
                     local fp = target.Part.CFrame.Position
@@ -1912,21 +1873,12 @@ local function startFarming()
                     rootPart.AssemblyLinearVelocity = Vector3.zero; task.wait(0.05)
                     if bodyVel and bodyVel.Parent then bodyVel.MaxForce = Vector3.new(1e9,1e9,1e9); bodyVel.Velocity = Vector3.zero end
                 end
-                local mutation = checkBrainrotMutation(target.Object)
-                if mutation then
-                    LogLabel.Text = string.format("[%s] %s MUTANT!", target.Rarity or "?", mutation)
-                    LogLabel.TextColor3 = Color3.fromRGB(255,0,255)
-                    MutationStatusLabel.Text = string.format("Grabbed: %s", mutation)
-                end
                 local pc = grabAllPrompts(target.Object) + grabNearbyPrompts(tp, 15)
                 pcall(function() for _, p in pairs(target.Object:GetDescendants()) do if p:IsA("BasePart") then firetouchinterest(rootPart,p,0); task.wait(); firetouchinterest(rootPart,p,1) end end
                     if target.Part and target.Part.Parent then firetouchinterest(rootPart,target.Part,0); task.wait(); firetouchinterest(rootPart,target.Part,1) end end)
                 pcall(function() for _, d in pairs(target.Object:GetDescendants()) do if d:IsA("ClickDetector") then fireclickdetector(d) end end end)
                 totalGrabbed += 1; GrabLabel.Text = "Grabbed: "..totalGrabbed
-                if not mutation then
-                    LogLabel.Text = "["..(target.Rarity or "?").."] "..target.Name.." (+"..pc..")"
-                    LogLabel.TextColor3 = Color3.fromRGB(130,130,160)
-                end
+                LogLabel.Text = "[" .. target.Rarity .. "] " .. displayName .. " (+" .. pc .. ")" .. (isMut and " 🧬" or "")
                 task.wait(WAIT_AT_TARGET); PhaseLabel.Text = "Diving..."; refreshChar()
                 smoothTween(CFrame.new(rootPart.Position.X, rootPart.Position.Y+TRAVEL_DEPTH, rootPart.Position.Z), DIVE_SPEED); task.wait(0.05)
             end
@@ -1950,9 +1902,9 @@ SelectAllBtn.MouseButton1Click:Connect(function()
         for n, d in pairs(brainrotCheckboxes) do if all then brainrotSelectedRarities[n]=nil; d.Check.Text=""; d.Check.BackgroundColor3=Color3.fromRGB(50,50,70)
         else brainrotSelectedRarities[n]=true; d.Check.Text="Y"; d.Check.BackgroundColor3=Color3.fromRGB(40,100,40) end end
     elseif activeTab == "Mutations" then
-        local all = true; for n in pairs(mutationCheckboxes) do if not mutationSelectedItems[n] then all=false; break end end
-        for n, d in pairs(mutationCheckboxes) do if all then mutationSelectedItems[n]=nil; d.Check.Text=""; d.Check.BackgroundColor3=Color3.fromRGB(60,30,80)
-        else mutationSelectedItems[n]=true; d.Check.Text="M"; d.Check.BackgroundColor3=Color3.fromRGB(120,0,160) end end
+        local all = true; for n in pairs(mutationCheckboxes) do if not mutationSelectedTypes[n] then all=false; break end end
+        for n, d in pairs(mutationCheckboxes) do if all then mutationSelectedTypes[n]=nil; d.Check.Text=""; d.Check.BackgroundColor3=Color3.fromRGB(60,30,70)
+        else mutationSelectedTypes[n]=true; d.Check.Text="🧬"; d.Check.BackgroundColor3=Color3.fromRGB(120,0,120) end end
     else
         local all = true; for n in pairs(luckyBlockCheckboxes) do if not luckyBlockSelectedRarities[n] then all=false; break end end
         for n, d in pairs(luckyBlockCheckboxes) do if all then luckyBlockSelectedRarities[n]=nil; d.Check.Text=""; d.Check.BackgroundColor3=Color3.fromRGB(50,50,70)
@@ -1974,55 +1926,140 @@ ReturnBtn.MouseButton1Click:Connect(function()
 end)
 
 --// ===================== PATH LISTENERS ===================== --
-BRAINROT_PATH.ChildAdded:Connect(function(child)
+
+local function onBrainrotChange()
     task.wait(0.5)
-    for n, d in pairs(brainrotCheckboxes) do local f = BRAINROT_PATH:FindFirstChild(n); d.CountLabel.Text = f and tostring(#f:GetChildren()) or "0" end
-    if mutationSpawnEnabled and child then
-        task.wait(0.3)
-        if child:IsA("Folder") then
-            for _, brainrot in pairs(child:GetChildren()) do
-                local mutation = checkBrainrotMutation(brainrot)
-                if mutation then
-                    MutationStatusLabel.Text = string.format("NEW in %s: %s [%s]", child.Name, brainrot.Name, mutation)
-                    MutationStatusLabel.TextColor3 = Color3.fromRGB(255, 50, 255)
-                    table.insert(activeMutations, {Name = brainrot.Name, Mutation = mutation, Object = brainrot, SpawnTime = tick()})
-                    MutationCountLabel.Text = string.format("Active Mutants: %d", #activeMutations)
+    for n, d in pairs(brainrotCheckboxes) do
+        local f = BRAINROT_PATH:FindFirstChild(n)
+        d.CountLabel.Text = f and tostring(#f:GetChildren()) or "0"
+    end
+    -- Also update mutation counts and event detection
+    updateMutationEventLabel()
+end
+
+BRAINROT_PATH.ChildAdded:Connect(function(child)
+    onBrainrotChange()
+    -- Check if this is a mutation event spawning
+    local childLower = string.lower(child.Name)
+    for mutLower, mutName in pairs(knownMutationNames) do
+        if string.find(childLower, mutLower) then
+            MutationEventLabel.Text = "🧬 EVENT! " .. mutName .. " spawned!"
+            MutationEventLabel.TextColor3 = Color3.fromRGB(255, 50, 255)
+            -- Flash notification
+            task.spawn(function()
+                for i = 1, 6 do
+                    MutationEventLabel.TextColor3 = (i % 2 == 0) and Color3.fromRGB(255, 50, 255) or Color3.fromRGB(0, 255, 100)
+                    task.wait(0.4)
+                end
+                updateMutationEventLabel()
+            end)
+            -- Auto-refresh mutation counts
+            for name, data in pairs(mutationCheckboxes) do
+                data.CountLabel.Text = tostring(getMutationCount(name))
+                -- Update active indicator
+                if getMutationCount(name) > 0 then
+                    data.ActiveIndicator.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+                else
+                    data.ActiveIndicator.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
                 end
             end
+            break
         end
     end
+    -- Also check children of the new folder
+    if child:IsA("Folder") or child:IsA("Model") then
+        child.ChildAdded:Connect(function()
+            task.wait(0.3)
+            onBrainrotChange()
+        end)
+        child.ChildRemoved:Connect(function()
+            task.wait(0.3)
+            onBrainrotChange()
+        end)
+    end
 end)
-BRAINROT_PATH.ChildRemoved:Connect(function() task.wait(0.5); for n, d in pairs(brainrotCheckboxes) do local f = BRAINROT_PATH:FindFirstChild(n); d.CountLabel.Text = f and tostring(#f:GetChildren()) or "0" end end)
+
+BRAINROT_PATH.ChildRemoved:Connect(function()
+    onBrainrotChange()
+end)
+
+-- Listen to children of existing brainrot folders for mutation detection
+for _, folder in pairs(BRAINROT_PATH:GetChildren()) do
+    if folder:IsA("Folder") or folder:IsA("Model") then
+        folder.ChildAdded:Connect(function(child)
+            task.wait(0.3)
+            onBrainrotChange()
+            -- Check if child is a mutation
+            local childLower = string.lower(child.Name)
+            for mutLower, mutName in pairs(knownMutationNames) do
+                if string.find(childLower, mutLower) then
+                    MutationEventLabel.Text = "🧬 " .. mutName .. " in " .. folder.Name .. "!"
+                    MutationEventLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+                    for name, data in pairs(mutationCheckboxes) do
+                        data.CountLabel.Text = tostring(getMutationCount(name))
+                        data.ActiveIndicator.BackgroundColor3 = getMutationCount(name) > 0 and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(80, 80, 80)
+                    end
+                    break
+                end
+            end
+        end)
+        folder.ChildRemoved:Connect(function()
+            task.wait(0.3)
+            onBrainrotChange()
+        end)
+    end
+end
+
 LUCKYBLOCK_PATH.ChildAdded:Connect(function() task.wait(0.5); for n, d in pairs(luckyBlockCheckboxes) do d.CountLabel.Text = tostring(getLuckyBlockRarityCount(n)) end end)
 LUCKYBLOCK_PATH.ChildRemoved:Connect(function() task.wait(0.5); for n, d in pairs(luckyBlockCheckboxes) do d.CountLabel.Text = tostring(getLuckyBlockRarityCount(n)) end end)
 
-if MUTATIONS_PATH then
-    MUTATIONS_PATH.DescendantAdded:Connect(function()
-        task.wait(0.3)
-        if MutationListLabel then
-            local allItems = getAllMutationItems()
-            MutationListLabel.Text = string.format("Mutations: %d items (updated)", #allItems)
-        end
-    end)
-end
+--// ===================== MUTATION ASSET LISTENER ===================== --
+-- Watch for new mutations being added to ReplicatedStorage
+MUTATIONS_ASSET_PATH.ChildAdded:Connect(function(child)
+    task.wait(0.5)
+    knownMutationNames[string.lower(child.Name)] = child.Name
+    refreshMutationTypes()
+    MutationEventLabel.Text = "🧬 New mutation: " .. child.Name
+    MutationEventLabel.TextColor3 = Color3.fromRGB(255, 220, 0)
+end)
 
---// ===================== INIT ===================== --
-refreshBrainrotFolders(); refreshLuckyBlockRarities(); refreshMutations(); switchTab("Brainrot")
-StatusLabel.Text = "Ready - select & START"; PhaseLabel.Text = "--"; updateSavedPosLabel()
-updateTrackerLabel()
+MUTATIONS_ASSET_PATH.ChildRemoved:Connect(function()
+    task.wait(0.5)
+    knownMutationNames = {}
+    refreshMutationTypes()
+end)
 
+--// ===================== MUTATION EVENT MONITOR (Background) ===================== --
 task.spawn(function()
-    task.wait(1)
-    local allItems = getAllMutationItems()
-    if MutationListLabel then
-        MutationListLabel.Text = string.format("Loaded: %d mutations from RS", #allItems)
-    end
-    if #allItems > 0 and MutationStatusLabel then
-        local categories = {}
-        for _, item in ipairs(allItems) do categories[item.Category] = true end
-        local catNames = {}
-        for cat in pairs(categories) do table.insert(catNames, cat) end
-        MutationStatusLabel.Text = string.format("Categories: %s", table.concat(catNames, ", "))
-        MutationStatusLabel.TextColor3 = Color3.fromRGB(200,100,255)
+    while ScreenGui and ScreenGui.Parent do
+        updateMutationEventLabel()
+        -- Update active indicators on mutation checkboxes
+        for name, data in pairs(mutationCheckboxes) do
+            local count = getMutationCount(name)
+            data.CountLabel.Text = tostring(count)
+            if data.ActiveIndicator then
+                data.ActiveIndicator.BackgroundColor3 = count > 0 and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(80, 80, 80)
+            end
+        end
+        task.wait(3) -- Check every 3 seconds
     end
 end)
+
+--// ===================== INIT ===================== --
+refreshBrainrotFolders()
+refreshLuckyBlockRarities()
+refreshMutationTypes()
+switchTab("Brainrot")
+StatusLabel.Text = "Ready - select & START"
+PhaseLabel.Text = "--"
+updateSavedPosLabel()
+updateTrackerLabel()
+updateMutationEventLabel()
+
+-- Log mutation assets found
+local mutTypes = scanMutationAssetTypes()
+if #mutTypes > 0 then
+    LogLabel.Text = "🧬 Mutations: " .. table.concat(mutTypes, ", ")
+else
+    LogLabel.Text = "No mutations found in assets"
+end
