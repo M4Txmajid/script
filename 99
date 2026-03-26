@@ -1,1725 +1,233 @@
--- ══════════════════════════════════════════════════════════════════
--- //  ModernHub v2.0  —  by MuslimDevs  (Fluent UI Edition)
--- //  Place inside StarterPlayerScripts as a LocalScript
--- //  Press RightShift to toggle GUI
--- ══════════════════════════════════════════════════════════════════
-
-do
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  SERVICES
-	-- ══════════════════════════════════════════════════════════════════
-
-	local Players           = game:GetService("Players")
-	local UserInputService  = game:GetService("UserInputService")
-	local RunService        = game:GetService("RunService")
-	local ReplicatedStorage = game:GetService("ReplicatedStorage")
-	local CollectionService = game:GetService("CollectionService")
-
-	local Player    = Players.LocalPlayer
-	local Mouse     = Player:GetMouse()
-	local Character = Player.Character or Player.CharacterAdded:Wait()
-	local HRP       = Character:WaitForChild("HumanoidRootPart")
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  REMOTES
-	-- ══════════════════════════════════════════════════════════════════
-
-	local ToolDamageEvent      = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("ToolDamageObject")
-	local RequestBurnItem      = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("RequestBurnItem")
-	local RequestStartDragging = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("RequestStartDraggingItem")
-	local RequestBagStore      = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("RequestBagStoreItem")
-	local RequestBagDrop       = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("RequestBagDropItem")
-	local RequestScrapItem     = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("RequestScrapItem")
-	local CraftItemRemote      = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("CraftItem")
-
-	local hitCounter = math.random(1, 10000)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  LOAD FLUENT UI
-	-- ══════════════════════════════════════════════════════════════════
-
-	local Fluent, SaveManager, InterfaceManager = loadstring(Game:HttpGet("https://raw.githubusercontent.com/discoart/FluentPlus/refs/heads/main/Beta.lua"))()
-
-	local Window = Fluent:CreateWindow({
-		Title    = "ModernHub  v2.0",
-		SubTitle = "by MuslimDevs",
-		TabWidth = 160,
-		Size     = UDim2.fromOffset(580, 460),
-		Acrylic  = true,
-		Theme    = "Dark",
-	})
-
-	local function ShowNotif(title, msg, kind)
-		Fluent:Notify({ Title = title, Content = msg, Duration = 3 })
-	end
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  REMOTE SCANNER
-	-- ══════════════════════════════════════════════════════════════════
-
-	task.spawn(function()
-		task.wait(3)
-		print("========== [ModernHub] REMOTE SCAN START ==========")
-		local remotes = {}
-		for _, v in pairs(game:GetDescendants()) do
-			if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
-				table.insert(remotes, v.ClassName .. " | " .. v:GetFullName())
-			end
-		end
-		table.sort(remotes)
-		for _, line in ipairs(remotes) do print(line) end
-		print("========== [ModernHub] REMOTE SCAN END — total: " .. #remotes .. " ==========")
-	end)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  CONFIGS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local KILL_CONFIG = {
-		ENABLED  = false,
-		RANGE    = 30,
-		COOLDOWN = 0.08,
-	}
-
-	local CONFIG = {
-		CUT_RANGE         = 80,
-		ENABLED           = false,
-		HIT_COOLDOWN      = 0,
-		SIMULTANEOUS_HITS = 30,
-	}
-
-	local CAMPFIRE_CONFIG = {
-		POSITION     = Vector3.new(0, 1.5, 0),
-		HEIGHT_ABOVE = 10,
-		AUTO_LEVEL   = false,
-	}
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  HELD TOOL AUTO-DETECT
-	-- ══════════════════════════════════════════════════════════════════
-
-	local HELD_TOOL_NAME = nil
-	local HELD_TOOL_OBJ  = nil
-
-	local NON_TOOL_NAMES = {
-		["Old Sack"] = true, ["Sack"] = true, ["Bag"] = true, ["Backpack"] = true,
-	}
-
-	local function getHeldTool()
-		return HELD_TOOL_OBJ, HELD_TOOL_NAME
-	end
-
-	task.spawn(function()
-		while true do
-			task.wait(0.5)
-			local inv  = Player:FindFirstChild("Inventory")
-			local char = Player.Character
-			if not inv or not char then
-				HELD_TOOL_NAME = nil; HELD_TOOL_OBJ = nil; continue
-			end
-			local found = nil
-			local charToolHandle = char:FindFirstChild("ToolHandle")
-			if charToolHandle then
-				for _, item in pairs(inv:GetChildren()) do
-					if NON_TOOL_NAMES[item.Name] then continue end
-					if item:GetAttribute("Interaction") == "Tool"
-						and item:GetAttribute("ToolName") ~= "Item Bag" then
-						local slot = item:GetAttribute("LockedHotbarSlot")
-						if slot and slot ~= 1 then
-							found = { obj = item, name = item.Name }; break
-						end
-					end
-				end
-			end
-			if not found and charToolHandle then
-				for _, item in pairs(inv:GetChildren()) do
-					if NON_TOOL_NAMES[item.Name] then continue end
-					if item:GetAttribute("Interaction") == "Tool"
-						and item:GetAttribute("ToolName") ~= "Item Bag" then
-						found = { obj = item, name = item.Name }; break
-					end
-				end
-			end
-			HELD_TOOL_OBJ  = found and found.obj  or nil
-			HELD_TOOL_NAME = found and found.name or nil
-		end
-	end)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  CHARACTER REFRESH
-	-- ══════════════════════════════════════════════════════════════════
-
-	Player.CharacterAdded:Connect(function(char)
-		Character = char
-		HRP       = char:WaitForChild("HumanoidRootPart")
-	end)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  KILL AURA LOOP
-	-- ══════════════════════════════════════════════════════════════════
-
-	task.spawn(function()
-		while true do
-			task.wait(KILL_CONFIG.COOLDOWN)
-			if not KILL_CONFIG.ENABLED then continue end
-			if not HRP or not HRP.Parent then continue end
-			local axe, _ = getHeldTool()
-			if not axe then continue end
-			local chars = workspace:FindFirstChild("Characters")
-			if not chars then continue end
-			for _, npc in pairs(chars:GetChildren()) do
-				if npc == Player.Character then continue end
-				local npcInst = npc:FindFirstChild("NPC")
-				if npcInst and npcInst:GetAttribute("Dead") == true then continue end
-				if npcInst and npcInst.Health ~= nil and npcInst.Health <= 0 then continue end
-				local npcHRP = npc:FindFirstChild("HumanoidRootPart")
-					or npc.PrimaryPart
-					or npc:FindFirstChildWhichIsA("BasePart")
-				if not npcHRP then continue end
-				local dist = (HRP.Position - npcHRP.Position).Magnitude
-				if dist > KILL_CONFIG.RANGE then continue end
-				local validStr = hitCounter .. "_" .. math.abs(Player.UserId)
-				hitCounter = hitCounter + 1
-				pcall(function()
-					ToolDamageEvent:InvokeServer(npc, axe, validStr, HRP.CFrame)
-				end)
-			end
-		end
-	end)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  AUTO CUT HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local currentlyActive = false
-
-	local function generateValidationString()
-		local id = hitCounter .. "_" .. math.abs(Player.UserId)
-		hitCounter = hitCounter + 1
-		return id
-	end
-
-	local function getTool()
-		local tool, _ = getHeldTool()
-		return tool
-	end
-
-	local function getTreePos(tree)
-		local pos
-		pcall(function()
-			if tree.PrimaryPart then pos = tree.PrimaryPart.Position
-			elseif tree:IsA("BasePart") then pos = tree.Position
-			else pos = tree:GetPivot().Position end
-		end)
-		return pos
-	end
-
-	local function getDistance(tree)
-		if not HRP or not HRP.Parent then return math.huge end
-		local pos = getTreePos(tree)
-		if not pos then return math.huge end
-		return (HRP.Position - pos).Magnitude
-	end
-
-	local function isResource(obj)
-		return obj:GetAttribute("Interaction") == "Resource" or obj:GetAttribute("Resource") ~= nil
-	end
-
-	local function isTreeAlive(tree)
-		if not tree or not tree.Parent then return false end
-		local hp = tree:GetAttribute("Health")
-		return hp and hp > 0
-	end
-
-	local function hitTreeOnceAsync(tree, tool)
-		if not tree or not tree.Parent then return end
-		if not isTreeAlive(tree) then return end
-		if not HRP or not HRP.Parent then return end
-		if getDistance(tree) > CONFIG.CUT_RANGE then return end
-		pcall(function()
-			ToolDamageEvent:InvokeServer(tree, tool, generateValidationString(), HRP.CFrame)
-		end)
-	end
-
-	local function hitTreesSimultaneously(treeList, tool)
-		for _, tree in ipairs(treeList) do
-			if tree and tree.Parent and isTreeAlive(tree) then
-				task.spawn(function() hitTreeOnceAsync(tree, tool) end)
-			end
-		end
-	end
-
-	local function getTreesInRange()
-		local trees   = {}
-		local foliage = workspace:FindFirstChild("Map")
-		foliage       = foliage and foliage:FindFirstChild("Foliage")
-		if not foliage then return trees end
-		for _, tree in pairs(foliage:GetChildren()) do
-			if isResource(tree) and isTreeAlive(tree) and getDistance(tree) <= CONFIG.CUT_RANGE then
-				table.insert(trees, tree)
-			end
-		end
-		return trees
-	end
-
-	-- Auto Cut core loop
-	task.spawn(function()
-		while true do
-			task.wait(0.02)
-			if not CONFIG.ENABLED then currentlyActive = false continue end
-			local tool = getTool()
-			if not tool then task.wait(1) continue end
-			if not HRP or not HRP.Parent then task.wait(0.5) continue end
-			local trees = getTreesInRange()
-			if #trees == 0 then currentlyActive = false task.wait(0.2) continue end
-			currentlyActive = true
-			local index = 1
-			while index <= #trees and CONFIG.ENABLED do
-				local batch = {}
-				for i = 0, CONFIG.SIMULTANEOUS_HITS - 1 do
-					local t = trees[index + i]
-					if t and t.Parent and isTreeAlive(t) then
-						table.insert(batch, t)
-					end
-				end
-				if #batch > 0 then
-					hitTreesSimultaneously(batch, tool)
-					task.wait(CONFIG.HIT_COOLDOWN + 0.05)
-				end
-				index = index + CONFIG.SIMULTANEOUS_HITS
-			end
-		end
-	end)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  CAMPFIRE HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local FUEL_NAMES = { "Log", "Fuel Canister", "Coal", "Chair" }
-	local FOOD_NAMES = { "Carrot", "Cake", "Berry", "Apple", "Morsel", "Steak" }
-
-	local function getCampfire()
-		local cf = workspace:FindFirstChild("Map")
-		cf = cf and cf:FindFirstChild("Campground")
-		cf = cf and cf:FindFirstChild("MainFire")
-		return cf
-	end
-
-	local function findCampfirePos()
-		local campground = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Campground")
-		if campground then
-			local mf = campground:FindFirstChild("MainFire")
-			if mf then
-				local p = mf.PrimaryPart or mf:FindFirstChildWhichIsA("BasePart", true)
-				if p then return p.Position end
-			end
-			local cf2 = campground:FindFirstChild("Campfire")
-			if cf2 then
-				local p = cf2.PrimaryPart or cf2:FindFirstChildWhichIsA("BasePart", true)
-				if p then return p.Position end
-			end
-		end
-		local map = workspace:FindFirstChild("Map")
-		if map then
-			for _, child in pairs(map:GetDescendants()) do
-				if (child.Name == "MainFire" or child.Name == "Campfire") and child:IsA("Model") then
-					local p = child.PrimaryPart or child:FindFirstChildWhichIsA("BasePart", true)
-					if p then return p.Position end
-				end
-			end
-		end
-		return nil
-	end
-
-	local function getFuelItems()
-		local items_list = {}
-		local items = workspace:FindFirstChild("Items")
-		if items then
-			for _, item in pairs(items:GetChildren()) do
-				for _, name in ipairs(FUEL_NAMES) do
-					if item.Name == name then
-						table.insert(items_list, item)
-						break
-					end
-				end
-			end
-		end
-		pcall(function()
-			for _, obj in getnilinstances() do
-				for _, name in ipairs(FUEL_NAMES) do
-					if obj.Name == name then
-						table.insert(items_list, obj)
-						break
-					end
-				end
-			end
-		end)
-		return items_list
-	end
-
-	local function getLogs()
-		local logs = {}
-		local items = workspace:FindFirstChild("Items")
-		if items then
-			for _, item in pairs(items:GetChildren()) do
-				if item.Name == "Log" then table.insert(logs, item) end
-			end
-		end
-		pcall(function()
-			for _, obj in getnilinstances() do
-				if obj.Name == "Log" then table.insert(logs, obj) end
-			end
-		end)
-		return logs
-	end
-
-	local SCRAPPER_CFRAME = CFrame.new(
-		20.9532776, 3.18912888, -5.23712301,
-		-1, 0, 0,
-		 0, 1, 0,
-		 0, 0, -1
-	)
-
-	local function dragLogToCampfire(logModel)
-		local campfire = getCampfire()
-		if not campfire then return false end
-		local main = logModel:FindFirstChild("Main") or logModel:FindFirstChildWhichIsA("BasePart", true)
-		if main and main:IsA("BasePart") then
-			main.CFrame = CFrame.new(
-				CAMPFIRE_CONFIG.POSITION.X + math.random(-2, 2),
-				CAMPFIRE_CONFIG.POSITION.Y + CAMPFIRE_CONFIG.HEIGHT_ABOVE,
-				CAMPFIRE_CONFIG.POSITION.Z + math.random(-2, 2)
-			) * CFrame.Angles(0, math.rad(math.random(0, 360)), math.rad(90))
-		end
-		pcall(function() RequestStartDragging:FireServer(logModel) end)
-		pcall(function() RequestBurnItem:FireServer(campfire, logModel) end)
-		return true
-	end
-
-	local function bringByName(name)
-		if not HRP or not HRP.Parent then return end
-		local folder = workspace:FindFirstChild("Items")
-		if not folder then return end
-		for _, child in pairs(folder:GetChildren()) do
-			if child.Name == name then
-				local part = child:FindFirstChildWhichIsA("BasePart", true)
-				if part then
-					part.CFrame = HRP.CFrame * CFrame.new(math.random(-4,4), 15, math.random(-4,4))
-					pcall(function() RequestStartDragging:FireServer(child) end)
-				end
-			end
-		end
-	end
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  ITEM SCAN HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local function scanItemNames()
-		local seen, result = {}, {}
-		local folder = workspace:FindFirstChild("Items")
-		if not folder then return result end
-		for _, child in pairs(folder:GetChildren()) do
-			if not seen[child.Name] then
-				seen[child.Name] = true
-				table.insert(result, child.Name)
-			end
-		end
-		table.sort(result)
-		return result
-	end
-
-	local function scanMapLocations()
-		local locations = {}
-		local mapFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Map")
-		if not mapFolder then return locations end
-		for _, folder in pairs(mapFolder:GetChildren()) do
-			if folder:IsA("Folder") or folder:IsA("Configuration") or folder:IsA("Model") then
-				local x = folder:GetAttribute("X") or folder:GetAttribute("PosX") or folder:GetAttribute("PositionX")
-				local y = folder:GetAttribute("Y") or folder:GetAttribute("PosY") or folder:GetAttribute("PositionY")
-				local z = folder:GetAttribute("Z") or folder:GetAttribute("PosZ") or folder:GetAttribute("PositionZ")
-				local posAttr = folder:GetAttribute("Position") or folder:GetAttribute("Coordinates")
-				if posAttr and typeof(posAttr) == "Vector3" then
-					x, y, z = posAttr.X, posAttr.Y, posAttr.Z
-				end
-				if x and z then
-					table.insert(locations, { Name = folder.Name, Pos = Vector3.new(x, y or 0, z) })
-				end
-			end
-		end
-		table.sort(locations, function(a, b) return a.Name < b.Name end)
-		return locations
-	end
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  GRINDER HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local function getGrindableItems()
-		local result = {}
-		local folder = workspace:FindFirstChild("Items")
-		if not folder then return result end
-		for _, child in pairs(folder:GetChildren()) do
-			local scrappable = child:GetAttribute("Scrappable")
-			local canGrind, isGem = false, false
-			pcall(function() canGrind = child:HasTag("CanBeGrinded") end)
-			pcall(function() isGem = child:HasTag("Gem") or child:HasTag("GreenGem") end)
-			if scrappable or canGrind or isGem then
-				table.insert(result, child)
-			end
-		end
-		return result
-	end
-
-	local function getGrindableNames()
-		local seen, result = {}, {}
-		for _, item in ipairs(getGrindableItems()) do
-			if not seen[item.Name] then
-				seen[item.Name] = true
-				table.insert(result, item.Name)
-			end
-		end
-		table.sort(result)
-		return result
-	end
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  CRAFT HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local BLUEPRINTS = {
-		{ Name = "Map",                        Tier = 1, WoodPrice = 3 },
-		{ Name = "Bunny Trap",                 Tier = 1, WoodPrice = 5 },
-		{ Name = "Old Bed",                    Tier = 1, WoodPrice = 20 },
-		{ Name = "Crafting Bench 2",           Tier = 1, WoodPrice = 5,  ScrapPrice = 1 },
-		{ Name = "Supply Crate",               Tier = 1, WoodPrice = 3 },
-		{ Name = "Crafting Bench 3",           Tier = 2, WoodPrice = 15, ScrapPrice = 10 },
-		{ Name = "Farm Plot",                  Tier = 2, WoodPrice = 10 },
-		{ Name = "Wood Rain Storage",          Tier = 2, ScrapPrice = 5 },
-		{ Name = "Sun Dial",                   Tier = 2, ScrapPrice = 5 },
-		{ Name = "Regular Bed",                Tier = 2, ScrapPrice = 5 },
-		{ Name = "Shelf",                      Tier = 2, ScrapPrice = 2 },
-		{ Name = "Compass",                    Tier = 2, ScrapPrice = 3 },
-		{ Name = "Log Wall",                   Tier = 2, WoodPrice = 12 },
-		{ Name = "Bear Trap",                  Tier = 2, ScrapPrice = 3 },
-		{ Name = "Crafting Bench 4",           Tier = 3, WoodPrice = 30, ScrapPrice = 20, GemPrice = 2 },
-		{ Name = "Crock Pot",                  Tier = 3, WoodPrice = 15, ScrapPrice = 10 },
-		{ Name = "Good Bed",                   Tier = 3, WoodPrice = 10, ScrapPrice = 10 },
-		{ Name = "Lightning Rod",              Tier = 3, ScrapPrice = 8 },
-		{ Name = "Radar",                      Tier = 3, WoodPrice = 15, ScrapPrice = 10 },
-		{ Name = "Boost Pad",                  Tier = 3, WoodPrice = 15, ScrapPrice = 10 },
-		{ Name = "Biofuel Processor",          Tier = 3, WoodPrice = 12, ScrapPrice = 12 },
-		{ Name = "Torch",                      Tier = 3, WoodPrice = 6,  ScrapPrice = 6 },
-		{ Name = "Crafting Bench 5",           Tier = 4, WoodPrice = 50, ScrapPrice = 50, GreenGemPrice = 1 },
-		{ Name = "Teleporter",                 Tier = 4, WoodPrice = 15, ScrapPrice = 25, GemPrice = 1 },
-		{ Name = "Ammo Crate",                 Tier = 4, WoodPrice = 20, ScrapPrice = 30, GemPrice = 1 },
-		{ Name = "Giant Bed",                  Tier = 4, WoodPrice = 20, ScrapPrice = 30, GemPrice = 1 },
-		{ Name = "Oil Drill",                  Tier = 4, WoodPrice = 25, ScrapPrice = 35, GemPrice = 1 },
-		{ Name = "Respawn Capsule",            Tier = 5, WoodPrice = 40, ScrapPrice = 40, GreenGemPrice = 1 },
-		{ Name = "Temporal Accelerometer",     Tier = 5, WoodPrice = 40, ScrapPrice = 40, GreenGemPrice = 1 },
-		{ Name = "Weather Machine",            Tier = 5, WoodPrice = 40, ScrapPrice = 40, GreenGemPrice = 1 },
-	}
-
-	local function formatCost(bp)
-		local parts = {}
-		if bp.WoodPrice     and bp.WoodPrice     > 0 then table.insert(parts, bp.WoodPrice     .. "W")  end
-		if bp.ScrapPrice    and bp.ScrapPrice    > 0 then table.insert(parts, bp.ScrapPrice    .. "S")  end
-		if bp.GemPrice      and bp.GemPrice      > 0 then table.insert(parts, bp.GemPrice      .. "G")  end
-		if bp.GreenGemPrice and bp.GreenGemPrice > 0 then table.insert(parts, bp.GreenGemPrice .. "GG") end
-		return #parts > 0 and table.concat(parts, " | ") or "Free"
-	end
-
-	local function getBlueprintNames()
-		local names = {}
-		for _, bp in ipairs(BLUEPRINTS) do
-			table.insert(names, bp.Name .. " [T" .. bp.Tier .. "] (" .. formatCost(bp) .. ")")
-		end
-		return names
-	end
-
-	local function getBlueprintByLabel(label)
-		for _, bp in ipairs(BLUEPRINTS) do
-			local lbl = bp.Name .. " [T" .. bp.Tier .. "] (" .. formatCost(bp) .. ")"
-			if lbl == label then return bp end
-		end
-		return nil
-	end
-
-	local function getHighestUnlockedTier()
-		local highest = 0
-		pcall(function()
-			local sf = Player.PlayerGui.Interface.CraftingTable.ScrollingFrame
-			for tier = 1, 5 do
-				local folder = sf:FindFirstChild("Tier" .. tier)
-				if folder and folder.Visible then highest = tier else break end
-			end
-		end)
-		if highest == 0 then highest = 1 end
-		return highest
-	end
-
-	local function isBlueprintUnlocked(bp)
-		if not bp.Tier then return true, nil end
-		local itemExists = false
-		pcall(function()
-			local sf     = Player.PlayerGui.Interface.CraftingTable.ScrollingFrame
-			local folder = sf:FindFirstChild("Tier" .. bp.Tier)
-			if folder and folder:FindFirstChild(bp.Name) then itemExists = true end
-		end)
-		if not itemExists then return true, nil end
-		local highestTier = getHighestUnlockedTier()
-		if bp.Tier > highestTier then
-			return false, string.format(
-				"Locked behind Tier %d. You have Tier %d. Craft a Crafting Bench %d first.",
-				bp.Tier, highestTier, bp.Tier
-			)
-		end
-		return true, nil
-	end
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  QUEST HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local KID_ATTR_NAMES = {
-		{ label = "Dino Kid",   npcName = "Lost Child",  attrName = "DinoKid"   },
-		{ label = "Kraken Kid", npcName = "Lost Child2", attrName = "KrakenKid" },
-		{ label = "Squid Kid",  npcName = "Lost Child3", attrName = "SquidKid"  },
-		{ label = "Koala Kid",  npcName = "Lost Child4", attrName = "KoalaKid"  },
-	}
-
-	local QUEST_KIDS = {}
-	local function buildQuestKids()
-		QUEST_KIDS = {}
-		local missingKids = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("MissingKids")
-		for _, k in ipairs(KID_ATTR_NAMES) do
-			local approachPos = nil
-			if missingKids then
-				local attr = missingKids:GetAttribute(k.attrName)
-				if attr and typeof(attr) == "Vector3" then
-					approachPos = Vector3.new(attr.X, attr.Y + 25, attr.Z)
-				end
-			end
-			table.insert(QUEST_KIDS, { label = k.label, npcName = k.npcName, approachPos = approachPos })
-		end
-	end
-	buildQuestKids()
-
-	local function getLiveNPC(npcName)
-		local chars = workspace:FindFirstChild("Characters")
-		if not chars then return nil end
-		return chars:FindFirstChild(npcName)
-	end
-
-	local function getBag()
-		local inv = Player:FindFirstChild("Inventory")
-		if not inv then return nil end
-		return inv:FindFirstChild("Old Sack")
-	end
-
-	local function tpTo(pos)
-		if HRP and HRP.Parent then HRP.CFrame = CFrame.new(pos) end
-	end
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  ESP HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local ESP_ENABLED  = false
-	local ESP_SELECTED = nil
-	local espHighlights = {}
-
-	local function scanTreeNames()
-		local names = {}
-		local seen  = {}
-		local foliage = workspace:FindFirstChild("Map")
-		foliage = foliage and foliage:FindFirstChild("Foliage")
-		if foliage then
-			for _, obj in pairs(foliage:GetChildren()) do
-				if (obj:GetAttribute("Interaction") == "Resource" or obj:GetAttribute("Resource") ~= nil)
-					and not seen[obj.Name] then
-					seen[obj.Name] = true
-					table.insert(names, obj.Name)
-				end
-			end
-		end
-		table.sort(names)
-		table.insert(names, 1, "All Trees")
-		return names
-	end
-
-	local function applyESPHighlight(tree)
-		if not tree or not tree.Parent then return end
-		local hp    = tree:GetAttribute("Health") or 0
-		local maxHp = tree:GetAttribute("MaxHealth") or hp
-		local ratio = maxHp > 0 and math.clamp(hp / maxHp, 0, 1) or 1
-		local r = math.floor((1 - ratio) * 255)
-		local g = math.floor(ratio * 200)
-		local barCol = Color3.fromRGB(r, g, 0)
-		local adorn = tree.PrimaryPart or tree:FindFirstChildWhichIsA("BasePart", true)
-		if not adorn then return end
-		local bb = espHighlights[tree]
-		if not bb or not bb.Parent then
-			bb = Instance.new("BillboardGui")
-			bb.Name         = "TreeESP"
-			bb.Size         = UDim2.new(0, 80, 0, 36)
-			bb.StudsOffset  = Vector3.new(0, 6, 0)
-			bb.AlwaysOnTop  = true
-			bb.ResetOnSpawn = false
-			bb.Adornee      = adorn
-			bb.Parent       = adorn
-			local lbl = Instance.new("TextLabel")
-			lbl.Name               = "HPLabel"
-			lbl.Size               = UDim2.new(1, 0, 0, 16)
-			lbl.BackgroundTransparency = 1
-			lbl.TextColor3         = Color3.fromRGB(255, 255, 255)
-			lbl.Font               = Enum.Font.GothamBold
-			lbl.TextSize           = 13
-			lbl.Text               = ""
-			lbl.Parent             = bb
-			local barBG = Instance.new("Frame")
-			barBG.Name             = "BarBG"
-			barBG.Size             = UDim2.new(1, 0, 0, 8)
-			barBG.Position         = UDim2.new(0, 0, 0, 18)
-			barBG.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-			barBG.BorderSizePixel  = 0
-			barBG.Parent           = bb
-			Instance.new("UICorner", barBG).CornerRadius = UDim.new(0, 3)
-			local barFill = Instance.new("Frame")
-			barFill.Name             = "BarFill"
-			barFill.Size             = UDim2.new(1, 0, 1, 0)
-			barFill.BackgroundColor3 = barCol
-			barFill.BorderSizePixel  = 0
-			barFill.Parent           = barBG
-			Instance.new("UICorner", barFill).CornerRadius = UDim.new(0, 3)
-			espHighlights[tree] = bb
-		else
-			bb.Adornee = adorn
-		end
-		local lbl2    = bb:FindFirstChild("HPLabel")
-		local barFill2 = bb:FindFirstChild("BarBG") and bb.BarBG:FindFirstChild("BarFill")
-		if lbl2     then lbl2.Text = math.floor(hp) .. " / " .. math.floor(maxHp) end
-		if barFill2 then
-			barFill2.Size             = UDim2.new(ratio, 0, 1, 0)
-			barFill2.BackgroundColor3 = barCol
-		end
-	end
-
-	local function clearAllESP()
-		for _, hl in pairs(espHighlights) do
-			if hl then hl:Destroy() end
-		end
-		espHighlights = {}
-	end
-
-	-- ESP refresh loop
-	task.spawn(function()
-		while true do
-			task.wait(0.5)
-			if not ESP_ENABLED then continue end
-			local foliage = workspace:FindFirstChild("Map")
-			foliage = foliage and foliage:FindFirstChild("Foliage")
-			if not foliage then continue end
-			for tree, hl in pairs(espHighlights) do
-				if not tree or not tree.Parent or (tree:GetAttribute("Health") or 0) <= 0 then
-					if hl then hl:Destroy() end
-					espHighlights[tree] = nil
-				end
-			end
-			for _, tree in pairs(foliage:GetChildren()) do
-				local isRes = tree:GetAttribute("Interaction") == "Resource" or tree:GetAttribute("Resource") ~= nil
-				if not isRes then continue end
-				if (tree:GetAttribute("Health") or 0) <= 0 then continue end
-				if ESP_SELECTED and ESP_SELECTED ~= "All Trees" and tree.Name ~= ESP_SELECTED then continue end
-				applyESPHighlight(tree)
-			end
-		end
-	end)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  FLY HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local flyEnabled = false
-	local flyBody    = nil
-	local flyGyro    = nil
-	local flyConn    = nil
-	local FLY_SPEED  = 60
-
-	local function stopFly()
-		flyEnabled = false
-		if flyConn then flyConn:Disconnect(); flyConn = nil end
-		if flyBody then flyBody:Destroy();    flyBody = nil end
-		if flyGyro then flyGyro:Destroy();    flyGyro = nil end
-		local char = Player.Character
-		if char then
-			local hum = char:FindFirstChildOfClass("Humanoid")
-			if hum then hum.PlatformStand = false end
-		end
-	end
-
-	local function startFly()
-		flyEnabled = true
-		local char = Player.Character
-		if not char or not HRP then return end
-		local hum = char:FindFirstChildOfClass("Humanoid")
-		if hum then hum.PlatformStand = true end
-		flyBody = Instance.new("BodyVelocity")
-		flyBody.Velocity  = Vector3.zero
-		flyBody.MaxForce  = Vector3.new(1e5, 1e5, 1e5)
-		flyBody.Parent    = HRP
-		flyGyro = Instance.new("BodyGyro")
-		flyGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
-		flyGyro.P         = 1e4
-		flyGyro.CFrame    = HRP.CFrame
-		flyGyro.Parent    = HRP
-		flyConn = RunService.Heartbeat:Connect(function()
-			if not flyEnabled then return end
-			if not HRP or not HRP.Parent then stopFly(); return end
-			local cf      = workspace.CurrentCamera.CFrame
-			local moveDir = Vector3.zero
-			if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + cf.LookVector  end
-			if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - cf.LookVector  end
-			if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - cf.RightVector end
-			if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + cf.RightVector end
-			if UserInputService:IsKeyDown(Enum.KeyCode.Space)        then moveDir = moveDir + Vector3.new(0,1,0)  end
-			if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
-			or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)    then moveDir = moveDir - Vector3.new(0,1,0)  end
-			flyBody.Velocity = moveDir.Magnitude > 0 and moveDir.Unit * FLY_SPEED or Vector3.zero
-			flyGyro.CFrame   = cf
-		end)
-	end
-
-	Player.CharacterAdded:Connect(function()
-		if flyEnabled then task.wait(0.5); startFly() end
-	end)
-
-	-- Noclip
-	local noclipEnabled = false
-	local noclipConn    = nil
-
-	local function setNoclip(v)
-		noclipEnabled = v
-		if v then
-			noclipConn = RunService.Stepped:Connect(function()
-				local char = Player.Character
-				if not char then return end
-				for _, part in pairs(char:GetDescendants()) do
-					if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
+-- MD Hub v2.1 Optimized + Animated Stroke + Theme Sync
+local Players,UIS,TS,RS,CS,RunService=game:GetService("Players"),game:GetService("UserInputService"),game:GetService("TweenService"),game:GetService("ReplicatedStorage"),game:GetService("CollectionService"),game:GetService("RunService")
+local P,pGui,Character,HRP=Players.LocalPlayer,Players.LocalPlayer:WaitForChild("PlayerGui"),(Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()),nil
+HRP=Character:WaitForChild("HumanoidRootPart")
+for _,v in pairs(pGui:GetChildren()) do if v.Name=="MuslimHub" then v:Destroy() end end task.wait(.1)
+local RE,hitCounter=RS:WaitForChild("RemoteEvents"),math.random(1,10000)
+local ToolDamage,ReqBurn,ReqDrag,ReqBagStore,ReqBagDrop,CraftRemote=RE:WaitForChild("ToolDamageObject"),RE:WaitForChild("RequestBurnItem"),RE:WaitForChild("RequestStartDraggingItem"),RE:WaitForChild("RequestBagStoreItem"),RE:WaitForChild("RequestBagDropItem"),RE:WaitForChild("CraftItem")
+local KILL,CFG,CAMP={ENABLED=false,RANGE=30,CD=.08},{CUT_RANGE=80,ENABLED=false,HITS=30},{POS=Vector3.new(0,1.5,0),HEIGHT=10,AUTO=false}
+local FLY_SPD,ESP_ON,ESP_SEL,espHL,questRun,autoQuest,autoChest,coinRun,flyOn,noclipOn,infJump=60,false,nil,{},false,false,false,false,false,false,false
+local flyB,flyG,flyC,noclipC,TOOL_OBJ,TOOL_NAME,FCC=nil,nil,nil,nil,nil,nil,nil
+local NON_TOOLS,FUEL,FOOD,GEAR,WEAP={["Old Sack"]=1,["Sack"]=1,["Bag"]=1,["Backpack"]=1},{"Log","Fuel Canister","Coal","Chair"},{"Carrot","Cake","Berry","Apple","Morsel","Steak"},{"Leather Body","Iron Body"},{"Revolver","Rifle","Revolver Ammo","Old Rod"}
+local SCRAPPER,KID_ID,KID_LBL,KID_NPC=CFrame.new(20.95,3.19,-5.24,-1,0,0,0,1,0,0,0,-1),{"DinoKid","KrakenKid","SquidKid","KoalaKid"},{"Dino Kid","Kraken Kid","Squid Kid","Koala Kid"},{"Lost Child","Lost Child2","Lost Child3","Lost Child4"}
+pcall(function() FCC=require(P.PlayerScripts.Client).FlowerAndCoinsClient end)
+P.CharacterAdded:Connect(function(c) Character,HRP=c,c:WaitForChild("HumanoidRootPart") if flyOn then task.wait(.5) startFly() end if noclipOn then task.wait(.1) setNoclip(true) end end)
+
+local function gVS() hitCounter+=1 return hitCounter.."_"..math.abs(P.UserId) end
+local function tPos(t) local p pcall(function() p=t.PrimaryPart and t.PrimaryPart.Position or t:IsA("BasePart") and t.Position or t:GetPivot().Position end) return p end
+local function gDist(t) return HRP and HRP.Parent and tPos(t) and(HRP.Position-tPos(t)).Magnitude or math.huge end
+local function isRes(o) return o:GetAttribute("Interaction")=="Resource" or o:GetAttribute("Resource") end
+local function isAlive(t) return t and t.Parent and(t:GetAttribute("Health")or 0)>0 end
+local function tpTo(p) if HRP and HRP.Parent then HRP.CFrame=CFrame.new(p) end end
+local function tpHold(p,t) if not HRP or not HRP.Parent then return false end t=t or.3 for _=1,3 do HRP.CFrame=CFrame.new(p) task.wait(.05) end local s=tick() while tick()-s<t do if not HRP or not HRP.Parent then return false end HRP.CFrame=CFrame.new(p) task.wait(.03) end return true end
+local function boost() pcall(function() workspace.StreamingMinRadius,workspace.StreamingTargetRadius=2048,4096 end) end
+local function stream(p) pcall(function() P:RequestStreamAroundAsync(p,5) end) end
+
+task.spawn(function() while true do task.wait(.5) local inv,char=P:FindFirstChild("Inventory"),P.Character if not inv or not char then TOOL_NAME,TOOL_OBJ=nil,nil continue end local f,h=nil,char:FindFirstChild("ToolHandle") if h then for _,i in pairs(inv:GetChildren()) do if not NON_TOOLS[i.Name] and i:GetAttribute("Interaction")=="Tool" and i:GetAttribute("ToolName")~="Item Bag" then f={obj=i,name=i.Name} break end end end TOOL_OBJ,TOOL_NAME=f and f.obj,f and f.name end end)
+task.spawn(function() while true do task.wait(KILL.CD) if not KILL.ENABLED or not HRP or not HRP.Parent or not TOOL_OBJ then continue end local ch=workspace:FindFirstChild("Characters") if ch then for _,n in pairs(ch:GetChildren()) do if n~=P.Character then local ni=n:FindFirstChild("NPC") if not(ni and(ni:GetAttribute("Dead") or(ni.Health and ni.Health<=0))) then local hr=n:FindFirstChild("HumanoidRootPart") or n.PrimaryPart if hr and(HRP.Position-hr.Position).Magnitude<=KILL.RANGE then pcall(function() ToolDamage:InvokeServer(n,TOOL_OBJ,gVS(),HRP.CFrame) end) end end end end end end end)
+task.spawn(function() while true do task.wait(.02) if not CFG.ENABLED or not TOOL_OBJ or not HRP or not HRP.Parent then task.wait(.5) continue end local fol=workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Foliage") if not fol then task.wait(.5) continue end local tr={} for _,t in pairs(fol:GetChildren()) do if isRes(t) and isAlive(t) and gDist(t)<=CFG.CUT_RANGE then table.insert(tr,t) end end if #tr==0 then task.wait(.2) continue end local i=1 while i<=#tr and CFG.ENABLED do for j=0,CFG.HITS-1 do local t=tr[i+j] if t and isAlive(t) then task.spawn(function() pcall(function() ToolDamage:InvokeServer(t,TOOL_OBJ,gVS(),HRP.CFrame) end) end) end end task.wait(.05) i+=CFG.HITS end end end)
+
+local function getCamp() local c=workspace:FindFirstChild("Map") c=c and c:FindFirstChild("Campground") return c and c:FindFirstChild("MainFire") end
+local function campPos() local cg=workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Campground") if cg then for _,n in ipairs({"MainFire","Campfire"}) do local f=cg:FindFirstChild(n) if f then local p=f.PrimaryPart or f:FindFirstChildWhichIsA("BasePart",true) if p then return p.Position end end end end end
+local function getLogs() local l,it={},workspace:FindFirstChild("Items") if it then for _,i in pairs(it:GetChildren()) do if i.Name=="Log" then table.insert(l,i) end end end return l end
+local function getFuel() local l,it={},workspace:FindFirstChild("Items") if it then for _,i in pairs(it:GetChildren()) do for _,n in ipairs(FUEL) do if i.Name==n then table.insert(l,i) break end end end end return l end
+local function dragToCamp(lm) local cf=getCamp() if not cf then return end local m=lm:FindFirstChild("Main") or lm:FindFirstChildWhichIsA("BasePart",true) if m then m.CFrame=CFrame.new(CAMP.POS.X+math.random(-2,2),CAMP.POS.Y+CAMP.HEIGHT,CAMP.POS.Z+math.random(-2,2))*CFrame.Angles(0,math.rad(math.random(0,360)),math.rad(90)) end pcall(function() ReqDrag:FireServer(lm) ReqBurn:FireServer(cf,lm) end) end
+local function bringName(n) if not HRP or not HRP.Parent then return end local f=workspace:FindFirstChild("Items") if f then for _,c in pairs(f:GetChildren()) do if c.Name==n then local p=c:FindFirstChildWhichIsA("BasePart",true) if p then p.CFrame=HRP.CFrame*CFrame.new(math.random(-4,4),15,math.random(-4,4)) pcall(function() ReqDrag:FireServer(c) end) end end end end end
+
+local function scanItems() local s,r={},{} local f=workspace:FindFirstChild("Items") if f then for _,c in pairs(f:GetChildren()) do if not s[c.Name] then s[c.Name]=1 table.insert(r,c.Name) end end end table.sort(r) return r end
+local function scanLocs() local l,mf={},RS:FindFirstChild("Map") if mf then for _,f in pairs(mf:GetChildren()) do local x,y,z=f:GetAttribute("X"),f:GetAttribute("Y"),f:GetAttribute("Z") local pa=f:GetAttribute("Position") if pa and typeof(pa)=="Vector3" then x,y,z=pa.X,pa.Y,pa.Z end if x and z then table.insert(l,{Name=f.Name,Pos=Vector3.new(x,y or 0,z)}) end end end table.sort(l,function(a,b) return a.Name<b.Name end) return l end
+local function scanGrind() local s,r,f={},{},workspace:FindFirstChild("Items") if f then for _,c in pairs(f:GetChildren()) do local sc,cg,ig=c:GetAttribute("Scrappable"),false,false pcall(function() cg=c:HasTag("CanBeGrinded") ig=c:HasTag("Gem") end) if(sc or cg or ig) and not s[c.Name] then s[c.Name]=1 table.insert(r,c.Name) end end end table.sort(r) return r end
+local function scanTrees() local n,s,f={},{},workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Foliage") if f then for _,o in pairs(f:GetChildren()) do if isRes(o) and not s[o.Name] then s[o.Name]=1 table.insert(n,o.Name) end end end table.sort(n) table.insert(n,1,"All Trees") return n end
+local function scanByList(ml) local r,s,f={},{},workspace:FindFirstChild("Items") if f then for _,c in pairs(f:GetChildren()) do for _,n in ipairs(ml) do if c.Name==n and not s[n] then s[n]=1 table.insert(r,n) end end end end table.sort(r) return r end
+local function scanPlayers() local n={} for _,p in pairs(Players:GetPlayers()) do if p~=P then table.insert(n,p.Name) end end table.sort(n) return n end
+local function scanLocNames() local l,n=scanLocs(),{} for _,loc in ipairs(l) do table.insert(n,loc.Name) end return n end
+
+local function firePrompt(pr) if not pr then return false end local od,ol,oe,oh=pr.MaxActivationDistance,pr.RequiresLineOfSight,pr.Enabled,pr.HoldDuration pr.MaxActivationDistance,pr.RequiresLineOfSight,pr.Enabled,pr.HoldDuration=9e9,false,true,0 local ok=false pcall(function() fireproximityprompt(pr,0) ok=true end) task.defer(function() pcall(function() pr.MaxActivationDistance,pr.RequiresLineOfSight,pr.Enabled,pr.HoldDuration=od,ol,oe,oh end) end) return ok end
+local function getChests() local c,f={},workspace:FindFirstChild("Items") if f then for _,ch in pairs(f:GetChildren()) do if ch.Name:lower():find("chest") then table.insert(c,ch) end end end return c end
+local function bringToMe(i) if not HRP then return end local p=i.PrimaryPart or i:FindFirstChildWhichIsA("BasePart",true) if p then p.CFrame=HRP.CFrame*CFrame.new(math.random(-5,5),math.random(3,8),math.random(-5,5)) pcall(function() ReqDrag:FireServer(i) end) end end
+local function openChests() if not HRP then return 0,0 end local f=workspace:FindFirstChild("Items") if not f then return 0,0 end local ex={} for _,c in pairs(f:GetChildren()) do ex[c]=1 end local ch,op=getChests(),0 for _,c in ipairs(ch) do for _,d in pairs(c:GetDescendants()) do if d:IsA("ProximityPrompt") then if firePrompt(d) then op+=1 end task.wait(.15) elseif d:IsA("ClickDetector") then pcall(function() fireclickdetector(d) end) op+=1 end end task.wait(.2) end local br,ab=0,{} for _=1,6 do task.wait(.5) if not HRP then break end for _,c in pairs(f:GetChildren()) do if not ex[c] and not ab[c] and not c.Name:lower():find("chest") then ab[c]=1 bringToMe(c) br+=1 end end end return op,br end
+local function startAutoChest() autoChest=true task.spawn(function() while autoChest do task.wait(2) if not autoChest or not HRP then continue end local f=workspace:FindFirstChild("Items") if not f then continue end local bf={} for _,c in pairs(f:GetChildren()) do bf[c]=1 end local op=false for _,c in ipairs(getChests()) do for _,d in pairs(c:GetDescendants()) do if d:IsA("ProximityPrompt") and d.Enabled then firePrompt(d) op=true task.wait(.15) end end end if op then task.wait(1.5) for _,c in pairs(f:GetChildren()) do if not bf[c] and not c.Name:lower():find("chest") then bringToMe(c) task.wait(.05) end end end end end) end
+
+local BP={{N="Map",T=1,W=3},{N="Bunny Trap",T=1,W=5},{N="Old Bed",T=1,W=20},{N="Crafting Bench 2",T=1,W=5,S=1},{N="Supply Crate",T=1,W=3},{N="Crafting Bench 3",T=2,W=15,S=10},{N="Farm Plot",T=2,W=10},{N="Wood Rain Storage",T=2,S=5},{N="Sun Dial",T=2,S=5},{N="Regular Bed",T=2,S=5},{N="Shelf",T=2,S=2},{N="Compass",T=2,S=3},{N="Log Wall",T=2,W=12},{N="Bear Trap",T=2,S=3},{N="Crafting Bench 4",T=3,W=30,S=20,G=2},{N="Crock Pot",T=3,W=15,S=10},{N="Good Bed",T=3,W=10,S=10},{N="Lightning Rod",T=3,S=8},{N="Radar",T=3,W=15,S=10},{N="Boost Pad",T=3,W=15,S=10},{N="Biofuel Processor",T=3,W=12,S=12},{N="Torch",T=3,W=6,S=6},{N="Crafting Bench 5",T=4,W=50,S=50,GG=1},{N="Teleporter",T=4,W=15,S=25,G=1},{N="Ammo Crate",T=4,W=20,S=30,G=1},{N="Giant Bed",T=4,W=20,S=30,G=1},{N="Oil Drill",T=4,W=25,S=35,G=1},{N="Respawn Capsule",T=5,W=40,S=40,GG=1},{N="Temporal Accelerometer",T=5,W=40,S=40,GG=1},{N="Weather Machine",T=5,W=40,S=40,GG=1}}
+local function fmtCost(b) local p={} if(b.W or 0)>0 then table.insert(p,b.W.."W") end if(b.S or 0)>0 then table.insert(p,b.S.."S") end if(b.G or 0)>0 then table.insert(p,b.G.."G") end if(b.GG or 0)>0 then table.insert(p,b.GG.."GG") end return #p>0 and table.concat(p,"|") or"Free" end
+local function getBPNames() local n={} for _,b in ipairs(BP) do table.insert(n,b.N.." [T"..b.T.."] ("..fmtCost(b)..")") end return n end
+local function getBPByLbl(l) for _,b in ipairs(BP) do if b.N.." [T"..b.T.."] ("..fmtCost(b)..")"==l then return b end end end
+
+local function isBag(n) local l=n:lower() return l:find("sack") or l:find("bag") end
+local function getBag() local inv=P:FindFirstChild("Inventory") if not inv then return end for _,n in ipairs({"Old Sack","Sack","Bag","Backpack","Item Bag"}) do local s=inv:FindFirstChild(n) if s then return s,n end end for _,i in pairs(inv:GetChildren()) do if isBag(i.Name) then return i,i.Name end end end
+local function scanSacks() local r,inv={},P:FindFirstChild("Inventory") if inv then for _,i in pairs(inv:GetChildren()) do if isBag(i.Name) then table.insert(r,i.Name) end end end table.sort(r) return r end
+
+local function kidPos(i) local mk=workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("MissingKids") if mk then local a=mk:GetAttribute(KID_ID[i]) if a and typeof(a)=="Vector3" then return a end end end
+local function kidProg() local nb=workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Campground") and workspace.Map.Campground:FindFirstChild("NoticeBoard") return nb and nb:GetAttribute("KidProgress") or 1 end
+local function kidFound(i) local nb=workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Campground") and workspace.Map.Campground:FindFirstChild("NoticeBoard") if nb then local tr=nb:FindFirstChild("MissingKidTracker") if tr then local f=tr:FindFirstChild(KID_ID[i]) if f and f:GetAttribute("Found") then return true end end end return false end
+local function npcPos(n) if not n then return end local p=n:FindFirstChild("HumanoidRootPart") or n.PrimaryPart return p and p.Position end
+local function findKid(i) local ch=workspace:FindFirstChild("Characters") if ch then local n=ch:FindFirstChild(KID_NPC[i]) if n then return n end end for _,n in pairs(CS:GetTagged("ChildNPC")) do if n:GetAttribute("KidId")==KID_ID[i] then return n end end local mk=workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("MissingKids") if mk then local n=mk:FindFirstChild(KID_NPC[i]) if n then return n end end end
+
+local function loadKids() boost() local pr,ld,tl=kidProg(),0,{} for i=1,4 do if kidFound(i) or i>pr then elseif findKid(i) then ld+=1 else table.insert(tl,i) end end for _,i in ipairs(tl) do if not questRun then break end local p=kidPos(i) if not p then continue end stream(p) tpTo(Vector3.new(p.X,p.Y+3,p.Z)) task.wait(.2) if findKid(i) then ld+=1 continue end stream(Vector3.new(p.X,0,p.Z)) tpTo(Vector3.new(p.X,p.Y+1,p.Z)) task.wait(.3) if findKid(i) then ld+=1 continue end for _,o in ipairs({Vector3.zero,Vector3.new(15,0,0),Vector3.new(-15,0,0),Vector3.new(0,0,15),Vector3.new(0,0,-15)}) do if not questRun then break end tpTo(p+o+Vector3.new(0,3,0)) stream(p+o) task.wait(.1) if findKid(i) then ld+=1 break end end end return ld end
+local function grabKid(n,b) if not n or not b or not HRP then return false end local p=npcPos(n) if not p then return false end tpHold(p,.4) for _=1,8 do p=npcPos(n) if p then HRP.CFrame=CFrame.new(p) end pcall(function() ReqBagStore:InvokeServer(b,n) end) task.wait(.15) if not npcPos(n) then return true end end return true end
+local function dropKid(b,n,i) if not b or not n then return false end local cp=campPos() if not cp then return false end stream(cp) task.wait(.1) local dp=cp+Vector3.new(0,5,0) tpHold(dp,.5) for _=1,5 do if HRP then HRP.CFrame=CFrame.new(dp) end task.wait(.05) pcall(function() ReqBagDrop:FireServer(b,n,true) end) task.wait(.1) end local st=tick() while tick()-st<3 do if not questRun or not HRP then break end HRP.CFrame=CFrame.new(dp) if kidFound(i) then return true end pcall(function() ReqBagDrop:FireServer(b,n,true) end) task.wait(.2) end task.wait(.5) return kidFound(i) end
+local function runQuest() if questRun or not HRP then return"Err" end local bg=getBag() if not bg then return"NoBag" end local cp=campPos() if not cp then return"NoCamp" end questRun=true loadKids() if not questRun then questRun=false return"Stop" end stream(cp) tpHold(cp+Vector3.new(0,5,0),.3) local dn,fl,sk=0,0,0 for i=1,4 do if not questRun then break end if kidFound(i) or i>kidProg() then sk+=1 continue end local n=findKid(i) if not n then fl+=1 continue end bg=getBag() if not bg then fl+=1 continue end grabKid(n,bg) if not questRun then break end bg=getBag() if not bg then fl+=1 continue end if dropKid(bg,n,i) or kidFound(i) then dn+=1 else fl+=1 end task.wait(.3) end tpHold(cp+Vector3.new(0,5,0),.3) questRun=false return dn,fl,sk end
+local function stopQuest() questRun,autoQuest=false,false end
+local function togAutoQuest() if autoQuest then autoQuest,questRun=false,false return false end autoQuest=true task.spawn(function() while autoQuest do if not questRun then runQuest() end while questRun and autoQuest do task.wait(.5) end if autoQuest then local all,pr=true,kidProg() for i=1,4 do if i<=pr and not kidFound(i) then all=false break end end task.wait(all and 10 or 3) end end end) return true end
+
+local function applyESP(t) if not t or not t.Parent then return end local hp,mhp=t:GetAttribute("Health") or 0,t:GetAttribute("MaxHealth") or(t:GetAttribute("Health") or 0) local r=mhp>0 and math.clamp(hp/mhp,0,1) or 1 local bc=Color3.fromRGB(math.floor((1-r)*255),math.floor(r*200),0) local ad=t.PrimaryPart or t:FindFirstChildWhichIsA("BasePart",true) if not ad then return end local bb=espHL[t] if not bb or not bb.Parent then bb=Instance.new("BillboardGui") bb.Name,bb.Size,bb.StudsOffset,bb.AlwaysOnTop,bb.Adornee,bb.Parent="ESP",UDim2.new(0,80,0,36),Vector3.new(0,6,0),true,ad,ad local lbl=Instance.new("TextLabel",bb) lbl.Name,lbl.Size,lbl.BackgroundTransparency,lbl.TextColor3,lbl.Font,lbl.TextSize="HP",UDim2.new(1,0,0,16),1,Color3.new(1,1,1),Enum.Font.GothamBold,13 local bg=Instance.new("Frame",bb) bg.Name,bg.Size,bg.Position,bg.BackgroundColor3,bg.BorderSizePixel="BG",UDim2.new(1,0,0,8),UDim2.new(0,0,0,18),Color3.fromRGB(40,40,40),0 Instance.new("UICorner",bg).CornerRadius=UDim.new(0,3) local fl=Instance.new("Frame",bg) fl.Name,fl.Size,fl.BackgroundColor3,fl.BorderSizePixel="Fill",UDim2.new(1,0,1,0),bc,0 Instance.new("UICorner",fl).CornerRadius=UDim.new(0,3) espHL[t]=bb else bb.Adornee=ad end local lbl,bf=bb:FindFirstChild("HP"),bb.BG and bb.BG:FindFirstChild("Fill") if lbl then lbl.Text=math.floor(hp).."/"..math.floor(mhp) end if bf then bf.Size,bf.BackgroundColor3=UDim2.new(r,0,1,0),bc end end
+local function clearESP() for _,h in pairs(espHL) do if h then h:Destroy() end end espHL={} end
+task.spawn(function() while true do task.wait(.5) if not ESP_ON then continue end local f=workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Foliage") if not f then continue end for t,h in pairs(espHL) do if not t or not t.Parent or(t:GetAttribute("Health") or 0)<=0 then if h then h:Destroy() end espHL[t]=nil end end for _,t in pairs(f:GetChildren()) do if isRes(t) and isAlive(t) and(not ESP_SEL or ESP_SEL=="All Trees" or t.Name==ESP_SEL) then applyESP(t) end end end end)
+
+local function stopFly() flyOn=false if flyC then flyC:Disconnect() flyC=nil end if flyB then flyB:Destroy() flyB=nil end if flyG then flyG:Destroy() flyG=nil end local c=P.Character if c then local h=c:FindFirstChildOfClass("Humanoid") if h then h.PlatformStand=false end end end
+local function startFly() flyOn=true local c=P.Character if not c or not HRP then return end local h=c:FindFirstChildOfClass("Humanoid") if h then h.PlatformStand=true end flyB=Instance.new("BodyVelocity") flyB.MaxForce,flyB.Velocity,flyB.Parent=Vector3.new(1e9,1e9,1e9),Vector3.zero,HRP flyG=Instance.new("BodyGyro") flyG.MaxTorque,flyG.P,flyG.Parent=Vector3.new(1e9,1e9,1e9),9e4,HRP flyC=RunService.RenderStepped:Connect(function() if not flyOn or not HRP then stopFly() return end local c2,h2=P.Character,nil if c2 then h2=c2:FindFirstChildOfClass("Humanoid") end if not h2 then return end local cf,md=workspace.CurrentCamera.CFrame,h2.MoveDirection if md.Magnitude>0 then local cL,cR=Vector3.new(cf.LookVector.X,0,cf.LookVector.Z).Unit,Vector3.new(cf.RightVector.X,0,cf.RightVector.Z).Unit local v=cf.LookVector*md:Dot(cL)+cf.RightVector*md:Dot(cR) flyB.Velocity=v.Magnitude>0 and v.Unit*FLY_SPD or Vector3.zero else flyB.Velocity=Vector3.zero end flyG.CFrame=cf end) end
+local function setNoclip(v) noclipOn=v if v then noclipC=RunService.Stepped:Connect(function() local c=P.Character if c then for _,p in pairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end end end) else if noclipC then noclipC:Disconnect() noclipC=nil end end end
+local function startCoins() coinRun=true task.spawn(function() while coinRun do task.wait(.5) if not HRP then continue end for _,c in pairs(CS:GetTagged("Coins")) do if c and c.Parent and not c:GetAttribute("QueuedToTake") then local p=c:FindFirstChildWhichIsA("BasePart",true) if p then p.CFrame=HRP.CFrame end c:SetAttribute("QueuedToTake",true) if FCC then pcall(function() FCC.PickupCoins(c) end) end end end end end) end
+UIS.JumpRequest:Connect(function() if infJump then local c=P.Character if c then local h=c:FindFirstChildOfClass("Humanoid") if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end end end)
+
+-- GUI
+local mob=UIS.TouchEnabled and not UIS.KeyboardEnabled
+local GF,TX,DM,WH={t=Enum.Font.FredokaOne,b=Enum.Font.GothamSemibold,d=Enum.Font.Gotham},Color3.fromRGB(235,235,240),Color3.fromRGB(120,120,138),Color3.new(1,1,1)
+local GW,GH,SW,TH,EH,FS=mob and 420 or 580,mob and 420 or 480,mob and 115 or 145,mob and 42 or 40,mob and 40 or 36,mob and 14 or 13
+local SEL_CRAFT,AUTO_CRAFT,AUTO_GRIND,GRIND_ITEM,BRING_ITEM,BRING_FOOD,BRING_GEAR,BRING_WEAP=nil,false,false,nil,nil,nil,nil,nil
+
+-- THEMES WITH FULL COLORS
+local Th={
+	P={a=Color3.fromRGB(160,80,240),ad=Color3.fromRGB(110,50,190),b1=Color3.fromRGB(14,10,22),b2=Color3.fromRGB(20,14,30),b3=Color3.fromRGB(28,18,42),e=Color3.fromRGB(36,22,52),br=Color3.fromRGB(50,30,70),mg={Color3.fromRGB(160,80,240),Color3.fromRGB(180,110,255),Color3.fromRGB(200,150,255),Color3.fromRGB(220,190,255),Color3.fromRGB(200,150,255),Color3.fromRGB(180,110,255)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(210,170,255),Color3.fromRGB(185,130,255),Color3.fromRGB(160,80,240),Color3.fromRGB(185,130,255),Color3.fromRGB(210,170,255)},ts={Color3.fromRGB(200,150,255),Color3.fromRGB(220,180,255),Color3.fromRGB(170,110,240),Color3.fromRGB(240,210,255)}},
+	B={a=Color3.fromRGB(90,120,255),ad=Color3.fromRGB(60,90,200),b1=Color3.fromRGB(15,15,20),b2=Color3.fromRGB(22,22,28),b3=Color3.fromRGB(30,30,38),e=Color3.fromRGB(40,40,45),br=Color3.fromRGB(48,48,60),mg={Color3.fromRGB(90,120,255),Color3.fromRGB(120,160,255),Color3.fromRGB(160,200,255),Color3.fromRGB(200,230,255),Color3.fromRGB(160,200,255),Color3.fromRGB(120,160,255)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(180,210,255),Color3.fromRGB(140,185,255),Color3.fromRGB(100,160,255),Color3.fromRGB(140,185,255),Color3.fromRGB(180,210,255)},ts={Color3.fromRGB(140,200,255),Color3.fromRGB(180,220,255),Color3.fromRGB(100,180,255),Color3.fromRGB(200,235,255)}},
+	R={a=Color3.fromRGB(220,50,50),ad=Color3.fromRGB(170,30,30),b1=Color3.fromRGB(20,12,12),b2=Color3.fromRGB(28,16,16),b3=Color3.fromRGB(38,22,22),e=Color3.fromRGB(45,28,28),br=Color3.fromRGB(60,35,35),mg={Color3.fromRGB(220,50,50),Color3.fromRGB(240,80,80),Color3.fromRGB(255,120,120),Color3.fromRGB(255,160,160),Color3.fromRGB(255,120,120),Color3.fromRGB(240,80,80)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(255,180,180),Color3.fromRGB(255,140,140),Color3.fromRGB(220,80,80),Color3.fromRGB(255,140,140),Color3.fromRGB(255,180,180)},ts={Color3.fromRGB(255,140,140),Color3.fromRGB(255,180,180),Color3.fromRGB(220,100,100),Color3.fromRGB(255,200,200)}},
+	G={a=Color3.fromRGB(50,200,100),ad=Color3.fromRGB(30,150,70),b1=Color3.fromRGB(10,18,14),b2=Color3.fromRGB(14,24,18),b3=Color3.fromRGB(18,32,24),e=Color3.fromRGB(22,40,30),br=Color3.fromRGB(30,55,40),mg={Color3.fromRGB(50,200,100),Color3.fromRGB(80,220,120),Color3.fromRGB(120,240,160),Color3.fromRGB(160,255,200),Color3.fromRGB(120,240,160),Color3.fromRGB(80,220,120)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(160,255,190),Color3.fromRGB(100,230,140),Color3.fromRGB(50,200,100),Color3.fromRGB(100,230,140),Color3.fromRGB(160,255,190)},ts={Color3.fromRGB(120,240,160),Color3.fromRGB(160,255,200),Color3.fromRGB(80,210,130),Color3.fromRGB(200,255,220)}},
+	O={a=Color3.fromRGB(255,140,30),ad=Color3.fromRGB(200,100,10),b1=Color3.fromRGB(20,14,8),b2=Color3.fromRGB(28,20,10),b3=Color3.fromRGB(38,28,14),e=Color3.fromRGB(48,34,16),br=Color3.fromRGB(65,46,20),mg={Color3.fromRGB(255,140,30),Color3.fromRGB(255,165,60),Color3.fromRGB(255,195,100),Color3.fromRGB(255,220,150),Color3.fromRGB(255,195,100),Color3.fromRGB(255,165,60)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(255,210,140),Color3.fromRGB(255,175,80),Color3.fromRGB(230,130,30),Color3.fromRGB(255,175,80),Color3.fromRGB(255,210,140)},ts={Color3.fromRGB(255,190,100),Color3.fromRGB(255,215,140),Color3.fromRGB(240,160,60),Color3.fromRGB(255,230,170)}},
+	C={a=Color3.fromRGB(0,210,230),ad=Color3.fromRGB(0,160,180),b1=Color3.fromRGB(8,18,22),b2=Color3.fromRGB(10,24,30),b3=Color3.fromRGB(14,32,40),e=Color3.fromRGB(16,40,50),br=Color3.fromRGB(22,55,68),mg={Color3.fromRGB(0,210,230),Color3.fromRGB(40,225,240),Color3.fromRGB(100,240,250),Color3.fromRGB(160,250,255),Color3.fromRGB(100,240,250),Color3.fromRGB(40,225,240)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(160,245,255),Color3.fromRGB(80,230,248),Color3.fromRGB(0,200,225),Color3.fromRGB(80,230,248),Color3.fromRGB(160,245,255)},ts={Color3.fromRGB(100,235,250),Color3.fromRGB(150,245,255),Color3.fromRGB(50,215,235),Color3.fromRGB(190,252,255)}},
+	K={a=Color3.fromRGB(240,80,180),ad=Color3.fromRGB(190,50,140),b1=Color3.fromRGB(22,10,18),b2=Color3.fromRGB(30,14,24),b3=Color3.fromRGB(40,18,32),e=Color3.fromRGB(50,22,40),br=Color3.fromRGB(68,30,55),mg={Color3.fromRGB(240,80,180),Color3.fromRGB(250,110,200),Color3.fromRGB(255,150,220),Color3.fromRGB(255,190,235),Color3.fromRGB(255,150,220),Color3.fromRGB(250,110,200)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(255,190,230),Color3.fromRGB(255,145,215),Color3.fromRGB(235,75,175),Color3.fromRGB(255,145,215),Color3.fromRGB(255,190,230)},ts={Color3.fromRGB(255,150,215),Color3.fromRGB(255,185,232),Color3.fromRGB(235,100,190),Color3.fromRGB(255,210,245)}}
+}
+local C,Reg,shT,adc,mnG,mdL,huL,mdT,huT={},{{},{},{},{},{},{},{},{}},{},nil,nil,nil,nil,nil,nil
+for k,v in pairs(Th.P) do C[k]=v end
+
+local function tw(o,d,p) TS:Create(o,TweenInfo.new(d),p):Play() end
+local function ni(c,p,r) local o=Instance.new(c) for k,v in pairs(p or{}) do o[k]=v end if r then o.Parent=r end return o end
+local function cr(o,r) ni("UICorner",{CornerRadius=UDim.new(0,r or 6)},o) end
+local function rk(i,o) table.insert(Reg[i],o) return o end
+
+-- COLOR SEQUENCE FOR ANIMATED STROKE
+local function sCS(t) return ColorSequence.new({ColorSequenceKeypoint.new(0,t.a),ColorSequenceKeypoint.new(.15,t.br),ColorSequenceKeypoint.new(.42,t.ad),ColorSequenceKeypoint.new(.48,t.mg[3]),ColorSequenceKeypoint.new(.5,t.mg[4]),ColorSequenceKeypoint.new(.52,t.mg[3]),ColorSequenceKeypoint.new(.58,t.ad),ColorSequenceKeypoint.new(.85,t.br),ColorSequenceKeypoint.new(1,t.a)}) end
+
+-- GLOW FUNCTION
+local function glow(o,g,d,w) local i=1 while o and o.Parent do tw(o,d or.5,{TextColor3=g[i]}) task.wait(w or.6) i=i%#g+1 end end
+
+-- APPLY THEME
+local function aT(t)
+	for k,v in pairs(t) do C[k]=v end
+	local d=.35
+	for _,o in pairs(Reg[1]) do if o and o.Parent then tw(o,d,{BackgroundColor3=t.b1}) end end
+	for _,o in pairs(Reg[2]) do if o and o.Parent then tw(o,d,{BackgroundColor3=t.b2}) end end
+	for _,o in pairs(Reg[3]) do if o and o.Parent then tw(o,d,{BackgroundColor3=t.b3}) end end
+	for _,o in pairs(Reg[4]) do if o and o.Parent then tw(o,d,{BackgroundColor3=t.e}) end end
+	for _,o in pairs(Reg[5]) do if o and o.Parent then if o:IsA("UIStroke") then tw(o,d,{Color=t.br}) else tw(o,d,{BackgroundColor3=t.br}) end end end
+	for _,o in pairs(Reg[6]) do if o and o.Parent then tw(o,d,{BackgroundColor3=t.a}) end end
+	for _,o in pairs(Reg[7]) do if o and o.Parent then tw(o,d,{Color=t.a}) end end
+	for _,o in pairs(Reg[8]) do if o and o.Parent then o.ScrollBarImageColor3=t.a end end
+	-- Update gradient
+	if mnG then mnG.Color=sCS(t) end
+	-- Restart title glows
+	if mdT then task.cancel(mdT) end
+	mdT=task.spawn(glow,mdL,t.mg,.6,.7)
+	if huT then task.cancel(huT) end
+	huT=task.spawn(function() task.wait(.35) glow(huL,t.hg,.6,.7) end)
+	-- Update tab shimmers
+	for _,v in pairs(shT) do
+		if v.on then
+			if v.th then task.cancel(v.th) end
+			v.th=task.spawn(function()
+				local i=1
+				while true do
+					tw(v.ic,.4,{TextColor3=t.ts[i]})
+					tw(v.nm,.4,{TextColor3=t.ts[i]})
+					task.wait(.5)
+					i=i%#t.ts+1
 				end
 			end)
-		else
-			if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
-			local char = Player.Character
-			if char then
-				for _, part in pairs(char:GetDescendants()) do
-					if part:IsA("BasePart") then part.CanCollide = true end
-				end
-			end
 		end
 	end
-
-	Player.CharacterAdded:Connect(function()
-		if noclipEnabled then task.wait(0.1); setNoclip(true) end
-	end)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  COIN COLLECT HELPERS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local coinCollectRunning = false
-	local FlowerAndCoinsClient = nil
-	pcall(function()
-		local clientModule = require(game.Players.LocalPlayer.PlayerScripts.Client)
-		FlowerAndCoinsClient = clientModule.FlowerAndCoinsClient
-	end)
-
-	local function startCoinCollect()
-		coinCollectRunning = true
-		task.spawn(function()
-			while coinCollectRunning do
-				task.wait(0.5)
-				if not coinCollectRunning then break end
-				if not HRP or not HRP.Parent then continue end
-				for _, coin in pairs(CollectionService:GetTagged("Coins")) do
-					if coin and coin.Parent
-						and not coin:GetAttribute("QueuedToTake")
-						and not coin:GetAttribute("Destroyed") then
-						local part = coin:FindFirstChildWhichIsA("BasePart", true) or (coin:IsA("BasePart") and coin)
-						if part then part.CFrame = HRP.CFrame end
-						coin:SetAttribute("QueuedToTake", true)
-						if FlowerAndCoinsClient then
-							pcall(function() FlowerAndCoinsClient.PickupCoins(coin) end)
-						end
-					end
-				end
-			end
-		end)
-	end
-
-	local function stopCoinCollect()
-		coinCollectRunning = false
-	end
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: HUB
-	-- ══════════════════════════════════════════════════════════════════
-
-	local HubTab = Window:AddTab({ Title = "Hub", Icon = "home" })
-
-	HubTab:AddParagraph({
-		Title   = "Welcome to MuslimDevs",
-		Content = "The best Roblox scripts by MuslimDevs\ndiscord.gg/escypvhJHu",
-	})
-
-	HubTab:AddButton({
-		Title       = "Copy Discord Link",
-		Description = "discord.gg/escypvhJHu",
-		Callback    = function()
-			setclipboard("https://discord.gg/escypvhJHu")
-			ShowNotif("Discord", "Link copied to clipboard!", "success")
-		end,
-	})
-
-	HubTab:AddParagraph({ Title = "Creator",   Content = "MuslimDevs" })
-	HubTab:AddParagraph({ Title = "Version",   Content = "v2.0.0" })
-	HubTab:AddParagraph({ Title = "Community", Content = "MuslimDevs" })
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: KILL
-	-- ══════════════════════════════════════════════════════════════════
-
-	local KillTab = Window:AddTab({ Title = "Kill", Icon = "sword" })
-
-	KillTab:AddParagraph({ Title = "Chopping Trees", Content = "Auto cut all trees within range using your held tool." })
-
-	KillTab:AddToggle("AutoCutToggle", {
-		Title    = "Auto Cut",
-		Default  = false,
-		Callback = function(v)
-			CONFIG.ENABLED = v
-			ShowNotif("Auto Cut", v and "Auto Cut enabled." or "Auto Cut disabled.", v and "success" or "warn")
-		end,
-	})
-
-	KillTab:AddSlider("CutRangeSlider", {
-		Title    = "Cut Range",
-		Min      = 0,
-		Max      = 100,
-		Default  = 80,
-		Rounding = 0,
-		Callback = function(v)
-			CONFIG.CUT_RANGE = v
-		end,
-	})
-
-	KillTab:AddParagraph({ Title = "Kill Aura", Content = "Automatically attacks nearby NPCs using your held weapon." })
-
-	KillTab:AddToggle("KillAuraToggle", {
-		Title    = "Kill Aura",
-		Default  = false,
-		Callback = function(v)
-			KILL_CONFIG.ENABLED = v
-			ShowNotif("Kill Aura", v and "Kill Aura enabled within " .. KILL_CONFIG.RANGE .. " studs." or "Kill Aura disabled.", v and "success" or "warn")
-		end,
-	})
-
-	KillTab:AddSlider("KillRangeSlider", {
-		Title    = "Kill Range",
-		Min      = 5,
-		Max      = 150,
-		Default  = 30,
-		Rounding = 0,
-		Callback = function(v)
-			KILL_CONFIG.RANGE = v
-		end,
-	})
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: LOGS (Campfire)
-	-- ══════════════════════════════════════════════════════════════════
-
-	local LogsTab = Window:AddTab({ Title = "Logs", Icon = "flame" })
-
-	LogsTab:AddParagraph({ Title = "Campfire", Content = "Manage logs and auto level your campfire." })
-
-	LogsTab:AddSlider("HeightAboveSlider", {
-		Title    = "Height Above Campfire",
-		Min      = 5,
-		Max      = 15,
-		Default  = 10,
-		Rounding = 0,
-		Callback = function(v)
-			CAMPFIRE_CONFIG.HEIGHT_ABOVE = math.floor((v / 5) + 0.5) * 5
-		end,
-	})
-
-	LogsTab:AddButton({
-		Title       = "Bring All Logs",
-		Description = "Brings all logs in the world to you",
-		Callback    = function()
-			local logs = getLogs()
-			if #logs == 0 then ShowNotif("Bring Logs", "No Logs found!", "warn") return end
-			if not HRP or not HRP.Parent then ShowNotif("Bring Logs", "Character not found!", "error") return end
-			local done = 0
-			for _, logModel in ipairs(logs) do
-				local main = logModel:FindFirstChild("Main") or logModel:FindFirstChildWhichIsA("BasePart", true)
-				if main and main:IsA("BasePart") then
-					main.CFrame = HRP.CFrame * CFrame.new(math.random(-3,3), 15, math.random(-3,3))
-					pcall(function() RequestStartDragging:FireServer(logModel) end)
-					done += 1
-				end
-			end
-			ShowNotif("Bring Logs", "Brought " .. done .. " log(s) to you!", "success")
-		end,
-	})
-
-	LogsTab:AddButton({
-		Title       = "Teleport to Campfire",
-		Description = "Instantly teleport to the campfire",
-		Callback    = function()
-			if not HRP or not HRP.Parent then ShowNotif("Campfire", "Character not found.", "error") return end
-			local pos = findCampfirePos()
-			if pos then
-				HRP.CFrame = CFrame.new(pos + Vector3.new(0, 5, 0))
-				ShowNotif("Campfire", "Teleported to campfire.", "success")
-			else
-				ShowNotif("Campfire", "Could not find campfire in workspace.", "error")
-			end
-		end,
-	})
-
-	LogsTab:AddToggle("AutoLevelToggle", {
-		Title    = "Auto Level Campfire",
-		Default  = false,
-		Callback = function(v)
-			CAMPFIRE_CONFIG.AUTO_LEVEL = v
-			if v then
-				ShowNotif("Auto Level", "Auto levelling campfire ON", "success")
-				task.spawn(function()
-					while CAMPFIRE_CONFIG.AUTO_LEVEL do
-						for _, item in ipairs(getFuelItems()) do
-							if not CAMPFIRE_CONFIG.AUTO_LEVEL then break end
-							dragLogToCampfire(item)
-						end
-						task.wait(3)
-					end
-				end)
-			else
-				ShowNotif("Auto Level", "Auto levelling campfire OFF", "warn")
-			end
-		end,
-	})
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: ITEMS
-	-- ══════════════════════════════════════════════════════════════════
-
-	local ItemsTab = Window:AddTab({ Title = "Items", Icon = "package" })
-
-	local BRING_ITEM   = nil
-	local BRING_FOOD   = nil
-	local BRING_GEAR   = nil
-	local BRING_WEAPON = nil
-
-	local GEAR_NAMES   = { "Leather Body", "Iron Body" }
-	local WEAPON_NAMES = { "Revolver", "Rifle", "Revolver Ammo", "Old Rod" }
-
-	-- Item bring section
-	ItemsTab:AddParagraph({ Title = "Item Bring", Content = "Select and bring items from the world to you." })
-
-	ItemsTab:AddDropdown("ItemDropdown", {
-		Title    = "Select Item",
-		Values   = scanItemNames(),
-		Default  = nil,
-		Callback = function(v)
-			BRING_ITEM = v
-		end,
-	})
-
-	ItemsTab:AddButton({
-		Title       = "Bring Item",
-		Description = "Brings selected item to your location",
-		Callback    = function()
-			if not BRING_ITEM then ShowNotif("No Item Selected", "Select an item from the dropdown first.", "warn") return end
-			if not HRP or not HRP.Parent then ShowNotif("Bring Item", "Character not found.", "error") return end
-			local folder = workspace:FindFirstChild("Items")
-			if not folder then ShowNotif("Bring Item", "No items folder found.", "error") return end
-			for _, child in pairs(folder:GetChildren()) do
-				if child.Name == BRING_ITEM then
-					local part = child:FindFirstChildWhichIsA("BasePart", true)
-					if part then
-						part.CFrame = HRP.CFrame * CFrame.new(math.random(-4,4), 15, math.random(-4,4))
-						pcall(function() RequestStartDragging:FireServer(child) end)
-					end
-				end
-			end
-			ShowNotif("Item Brought", "All nearby " .. BRING_ITEM .. " brought to you.", "success")
-		end,
-	})
-
-	-- Food bring section
-	ItemsTab:AddParagraph({ Title = "Food Bring", Content = "Select and bring food items to you." })
-
-	ItemsTab:AddDropdown("FoodDropdown", {
-		Title    = "Select Food",
-		Values   = FOOD_NAMES,
-		Default  = nil,
-		Callback = function(v)
-			BRING_FOOD = v
-		end,
-	})
-
-	ItemsTab:AddButton({
-		Title       = "Bring Food",
-		Description = "Brings selected food to your location",
-		Callback    = function()
-			if not BRING_FOOD then ShowNotif("No Food Selected", "Select a food item first.", "warn") return end
-			if not HRP or not HRP.Parent then return end
-			local folder = workspace:FindFirstChild("Items")
-			if not folder then return end
-			for _, child in pairs(folder:GetChildren()) do
-				if child.Name == BRING_FOOD then
-					local part = child:FindFirstChildWhichIsA("BasePart", true)
-					if part then
-						part.CFrame = HRP.CFrame * CFrame.new(math.random(-4,4), 15, math.random(-4,4))
-						pcall(function() RequestStartDragging:FireServer(child) end)
-					end
-				end
-			end
-			ShowNotif("Food Brought", "All nearby " .. BRING_FOOD .. " brought to you.", "success")
-		end,
-	})
-
-	ItemsTab:AddButton({
-		Title       = "Bring All Foods",
-		Description = "Brings every food type to you",
-		Callback    = function()
-			if not HRP or not HRP.Parent then ShowNotif("Bring All Foods", "Character not found.", "error") return end
-			local folder = workspace:FindFirstChild("Items")
-			if not folder then ShowNotif("Bring All Foods", "No items folder found.", "error") return end
-			local count = 0
-			for _, child in pairs(folder:GetChildren()) do
-				for _, fn in ipairs(FOOD_NAMES) do
-					if child.Name == fn then
-						local part = child:FindFirstChildWhichIsA("BasePart", true)
-						if part then
-							part.CFrame = HRP.CFrame * CFrame.new(math.random(-4,4), 15, math.random(-4,4))
-							pcall(function() RequestStartDragging:FireServer(child) end)
-							count += 1
-						end
-						break
-					end
-				end
-			end
-			ShowNotif("Bring All Foods", count > 0 and count .. " food items brought." or "No food found.", count > 0 and "success" or "warn")
-		end,
-	})
-
-	ItemsTab:AddButton({
-		Title       = "Bring All Items",
-		Description = "Rains all world items down on you",
-		Callback    = function()
-			if not HRP or not HRP.Parent then ShowNotif("Bring All Items", "Character not found.", "error") return end
-			local folder = workspace:FindFirstChild("Items")
-			if not folder then ShowNotif("Bring All Items", "No items folder found.", "error") return end
-			local itemList = {}
-			for _, child in pairs(folder:GetChildren()) do
-				local part = child:FindFirstChildWhichIsA("BasePart", true)
-				if part then table.insert(itemList, { model = child, part = part }) end
-			end
-			if #itemList == 0 then ShowNotif("Bring All Items", "No items in the world.", "warn") return end
-			ShowNotif("Bring All Items", "Raining " .. #itemList .. " items...", "info")
-			task.spawn(function()
-				local done = 0
-				for _, entry in ipairs(itemList) do
-					if not HRP or not HRP.Parent then break end
-					if not entry.part or not entry.part.Parent then continue end
-					local spread = math.random(3, 18)
-					local angle  = math.random(0, 360)
-					entry.part.CFrame = HRP.CFrame * CFrame.new(
-						math.cos(math.rad(angle)) * spread,
-						math.random(20, 45),
-						math.sin(math.rad(angle)) * spread
-					)
-					pcall(function() RequestStartDragging:FireServer(entry.model) end)
-					done += 1
-					task.wait(0.05)
-				end
-				ShowNotif("Bring All Items", done .. " item(s) rained down!", "success")
-			end)
-		end,
-	})
-
-	-- Gear & Weapon section
-	ItemsTab:AddParagraph({ Title = "Gear & Weapons", Content = "Select and bring gear or weapons to you." })
-
-	ItemsTab:AddDropdown("GearDropdown", {
-		Title    = "Select Gear",
-		Values   = GEAR_NAMES,
-		Default  = nil,
-		Callback = function(v) BRING_GEAR = v end,
-	})
-
-	ItemsTab:AddDropdown("WeaponDropdown", {
-		Title    = "Select Weapon",
-		Values   = WEAPON_NAMES,
-		Default  = nil,
-		Callback = function(v) BRING_WEAPON = v end,
-	})
-
-	ItemsTab:AddButton({
-		Title    = "Bring Gear",
-		Callback = function()
-			if not BRING_GEAR then ShowNotif("No Gear Selected", "Select a gear item first.", "warn") return end
-			bringByName(BRING_GEAR)
-			ShowNotif("Gear Brought", BRING_GEAR .. " brought to your location.", "success")
-		end,
-	})
-
-	ItemsTab:AddButton({
-		Title    = "Bring Weapon",
-		Callback = function()
-			if not BRING_WEAPON then ShowNotif("No Weapon Selected", "Select a weapon first.", "warn") return end
-			bringByName(BRING_WEAPON)
-			ShowNotif("Weapon Brought", BRING_WEAPON .. " brought to your location.", "success")
-		end,
-	})
-
-	ItemsTab:AddButton({
-		Title    = "Bring All Gear",
-		Callback = function()
-			if not HRP or not HRP.Parent then ShowNotif("Bring All Gear", "Character not found.", "error") return end
-			local count = 0
-			local folder = workspace:FindFirstChild("Items")
-			if folder then
-				for _, name in ipairs(GEAR_NAMES) do
-					for _, child in pairs(folder:GetChildren()) do
-						if child.Name == name then
-							local part = child:FindFirstChildWhichIsA("BasePart", true)
-							if part then
-								part.CFrame = HRP.CFrame * CFrame.new(math.random(-4,4), 15, math.random(-4,4))
-								pcall(function() RequestStartDragging:FireServer(child) end)
-								count += 1
-							end
-						end
-					end
-				end
-			end
-			ShowNotif("Bring All Gear", count > 0 and count .. " gear pieces brought." or "No gear found.", count > 0 and "success" or "warn")
-		end,
-	})
-
-	ItemsTab:AddButton({
-		Title    = "Bring All Weapons",
-		Callback = function()
-			if not HRP or not HRP.Parent then ShowNotif("Bring All Weapons", "Character not found.", "error") return end
-			local count = 0
-			local folder = workspace:FindFirstChild("Items")
-			if folder then
-				for _, name in ipairs(WEAPON_NAMES) do
-					for _, child in pairs(folder:GetChildren()) do
-						if child.Name == name then
-							local part = child:FindFirstChildWhichIsA("BasePart", true)
-							if part then
-								part.CFrame = HRP.CFrame * CFrame.new(math.random(-4,4), 15, math.random(-4,4))
-								pcall(function() RequestStartDragging:FireServer(child) end)
-								count += 1
-							end
-						end
-					end
-				end
-			end
-			ShowNotif("Bring All Weapons", count > 0 and count .. " weapons brought." or "No weapons found.", count > 0 and "success" or "warn")
-		end,
-	})
-
-	-- Coin collect section
-	ItemsTab:AddParagraph({ Title = "Coin Collect", Content = "Automatically collect nearby coin stacks." })
-
-	ItemsTab:AddToggle("CoinCollectToggle", {
-		Title    = "Auto Collect Coins",
-		Default  = false,
-		Callback = function(v)
-			if v then
-				startCoinCollect()
-				ShowNotif("Coins", "Auto collecting Coin Stacks.", "success")
-			else
-				stopCoinCollect()
-				ShowNotif("Coins", "Auto collect disabled.", "warn")
-			end
-		end,
-	})
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: CRAFT
-	-- ══════════════════════════════════════════════════════════════════
-
-	local CraftTab = Window:AddTab({ Title = "Craft", Icon = "hammer" })
-
-	local SELECTED_CRAFT = nil
-	local AUTO_CRAFT     = false
-	local AUTO_GRIND     = false
-	local GRIND_ITEM     = nil
-
-	CraftTab:AddParagraph({ Title = "Crafting", Content = "Select a blueprint and craft it instantly." })
-
-	CraftTab:AddDropdown("CraftDropdown", {
-		Title    = "Select Blueprint",
-		Values   = getBlueprintNames(),
-		Default  = nil,
-		Callback = function(v)
-			SELECTED_CRAFT = getBlueprintByLabel(v)
-		end,
-	})
-
-	local function tryCraft()
-		if not SELECTED_CRAFT then
-			ShowNotif("No Blueprint", "Select a blueprint first.", "warn")
-			return
-		end
-		local tierOk, tierReason = isBlueprintUnlocked(SELECTED_CRAFT)
-		if not tierOk then
-			ShowNotif("Tier Locked", tierReason, "warn")
-			return
-		end
-		local success, result = false, nil
-		pcall(function()
-			result  = CraftItemRemote:InvokeServer(SELECTED_CRAFT.Name)
-			success = result == true
-		end)
-		if success then
-			ShowNotif("Crafting Started", SELECTED_CRAFT.Name .. " is being crafted.", "success")
-		else
-			ShowNotif("Craft Failed", "Could not craft " .. SELECTED_CRAFT.Name .. ". Ensure you are near a Crafting Bench.", "error")
-		end
-	end
-
-	CraftTab:AddButton({
-		Title       = "Craft",
-		Description = "Craft the selected blueprint",
-		Callback    = tryCraft,
-	})
-
-	local autoCraftGen = 0
-	CraftTab:AddToggle("AutoCraftToggle", {
-		Title    = "Auto Craft (every 3s)",
-		Default  = false,
-		Callback = function(v)
-			AUTO_CRAFT = v
-			if v then
-				autoCraftGen = autoCraftGen + 1
-				local myGen = autoCraftGen
-				ShowNotif("Auto Craft", "Auto Craft ON", "success")
-				task.spawn(function()
-					while AUTO_CRAFT and autoCraftGen == myGen do
-						pcall(tryCraft)
-						task.wait(3)
-					end
-				end)
-			else
-				ShowNotif("Auto Craft", "Auto Craft OFF", "warn")
-			end
-		end,
-	})
-
-	-- Grinder section
-	CraftTab:AddParagraph({ Title = "Grinder", Content = "Send items to the scrapper to get scrap." })
-
-	CraftTab:AddDropdown("GrindDropdown", {
-		Title    = "Select Item to Grind",
-		Values   = getGrindableNames(),
-		Default  = nil,
-		Callback = function(v)
-			GRIND_ITEM = v
-		end,
-	})
-
-	local function doGrindItem()
-		if not GRIND_ITEM then return 0 end
-		local folder = workspace:FindFirstChild("Items")
-		if not folder then return 0 end
-		local done = 0
-		for _, child in pairs(folder:GetChildren()) do
-			if child.Name == GRIND_ITEM then
-				local part = child.PrimaryPart or child:FindFirstChildWhichIsA("BasePart", true)
-				if part then
-					part.CFrame = SCRAPPER_CFRAME * CFrame.new(
-						math.random(-1,1)*0.3, 1.5, math.random(-1,1)*0.3
-					)
-					pcall(function() RequestStartDragging:FireServer(child) end)
-					done += 1
-				end
-			end
-		end
-		return done
-	end
-
-	CraftTab:AddButton({
-		Title       = "Grind Selected",
-		Description = "Send selected item to the scrapper",
-		Callback    = function()
-			if not GRIND_ITEM then ShowNotif("Grinder", "Select an item first!", "warn") return end
-			local count = doGrindItem()
-			if count > 0 then
-				ShowNotif("Grinder", "Sent " .. count .. " " .. GRIND_ITEM .. " to grinder!", "success")
-			else
-				ShowNotif("Grinder", "No " .. GRIND_ITEM .. " found!", "warn")
-			end
-		end,
-	})
-
-	CraftTab:AddButton({
-		Title       = "Grind All",
-		Description = "Send all grindable items to the scrapper",
-		Callback    = function()
-			local folder = workspace:FindFirstChild("Items")
-			if not folder then ShowNotif("Grind All", "No Items folder found!", "error") return end
-			local done = 0
-			for _, child in pairs(folder:GetChildren()) do
-				local scrappable = child:GetAttribute("Scrappable")
-				local canGrind, isGem = false, false
-				pcall(function() canGrind = child:HasTag("CanBeGrinded") end)
-				pcall(function() isGem = child:HasTag("Gem") or child:HasTag("GreenGem") end)
-				if scrappable or canGrind or isGem then
-					local part = child.PrimaryPart or child:FindFirstChildWhichIsA("BasePart", true)
-					if part then
-						part.CFrame = SCRAPPER_CFRAME * CFrame.new(
-							math.random(-1,1)*0.3, 1.5, math.random(-1,1)*0.3
-						)
-						pcall(function() RequestStartDragging:FireServer(child) end)
-						done += 1
-					end
-				end
-			end
-			ShowNotif("Grind All", done > 0 and "Sent " .. done .. " item(s) to grinder!" or "No grindable items found!", done > 0 and "success" or "warn")
-		end,
-	})
-
-	local autoGrindGen = 0
-	CraftTab:AddToggle("AutoGrindToggle", {
-		Title    = "Auto Grind (every 2s)",
-		Default  = false,
-		Callback = function(v)
-			AUTO_GRIND = v
-			if v then
-				autoGrindGen = autoGrindGen + 1
-				local myGen = autoGrindGen
-				ShowNotif("Grinder", "Auto Grind ON", "success")
-				task.spawn(function()
-					while AUTO_GRIND and autoGrindGen == myGen do
-						pcall(doGrindItem)
-						task.wait(2)
-					end
-				end)
-			else
-				ShowNotif("Grinder", "Auto Grind OFF", "warn")
-			end
-		end,
-	})
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: MAP
-	-- ══════════════════════════════════════════════════════════════════
-
-	local MapTab = Window:AddTab({ Title = "Map", Icon = "map" })
-
-	local MAP_SELECTED = nil
-
-	MapTab:AddParagraph({ Title = "Teleport", Content = "Teleport to scanned map locations." })
-
-	local mapLocations = scanMapLocations()
-	local mapLocNames  = {}
-	for _, loc in ipairs(mapLocations) do
-		table.insert(mapLocNames, loc.Name)
-	end
-	if #mapLocNames == 0 then
-		mapLocNames = { "No locations found" }
-	end
-
-	MapTab:AddDropdown("MapDropdown", {
-		Title    = "Select Location",
-		Values   = mapLocNames,
-		Default  = nil,
-		Callback = function(v)
-			for _, loc in ipairs(mapLocations) do
-				if loc.Name == v then MAP_SELECTED = loc break end
-			end
-		end,
-	})
-
-	MapTab:AddButton({
-		Title       = "Teleport",
-		Description = "Teleport to the selected location",
-		Callback    = function()
-			if not MAP_SELECTED then ShowNotif("Teleport", "Select a location first.", "warn") return end
-			if not HRP or not HRP.Parent then ShowNotif("Teleport", "Character not found.", "error") return end
-			HRP.CFrame = CFrame.new(MAP_SELECTED.Pos + Vector3.new(0, 3, 0))
-			ShowNotif("Teleport", "Teleported to " .. MAP_SELECTED.Name .. ".", "success")
-		end,
-	})
-
-	MapTab:AddButton({
-		Title       = "Teleport to Campfire",
-		Description = "Go directly to the campfire",
-		Callback    = function()
-			if not HRP or not HRP.Parent then ShowNotif("Campfire", "Character not found.", "error") return end
-			local pos = findCampfirePos()
-			if pos then
-				HRP.CFrame = CFrame.new(pos + Vector3.new(0, 5, 0))
-				ShowNotif("Campfire", "Teleported to campfire.", "success")
-			else
-				ShowNotif("Campfire", "Campfire not found.", "error")
-			end
-		end,
-	})
-
-	-- Missing kids teleport
-	MapTab:AddParagraph({ Title = "Missing Kids", Content = "Teleport to each missing kid's location." })
-
-	local KID_NPC_MAP = {
-		DinoKid   = "Lost Child",
-		KrakenKid = "Lost Child2",
-		SquidKid  = "Lost Child3",
-		KoalaKid  = "Lost Child4",
-	}
-
-	local function getKidPos(kidName)
-		local chars = workspace:FindFirstChild("Characters")
-		if not chars then return nil end
-		local npcName = KID_NPC_MAP[kidName]
-		if not npcName then return nil end
-		local npc = chars:FindFirstChild(npcName)
-		if not npc then return nil end
-		local part = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
-		if not part then return nil end
-		return part.Position
-	end
-
-	local kidButtonLabels  = { "TP → Dino Kid", "TP → Kraken Kid", "TP → Squid Kid", "TP → Koala Kid" }
-	local kidAttrNames     = { "DinoKid", "KrakenKid", "SquidKid", "KoalaKid" }
-	local kidLabels        = { "Dino Kid", "Kraken Kid", "Squid Kid", "Koala Kid" }
-
-	for i = 1, 4 do
-		local label    = kidLabels[i]
-		local attrName = kidAttrNames[i]
-		MapTab:AddButton({
-			Title    = kidButtonLabels[i],
-			Callback = function()
-				if not HRP or not HRP.Parent then ShowNotif("Missing Kids", "Character not found.", "error") return end
-				local pos = getKidPos(attrName)
-				if pos then
-					HRP.CFrame = CFrame.new(pos)
-					ShowNotif("Missing Kids", "Teleported to " .. label .. ".", "success")
-				else
-					ShowNotif("Missing Kids", label .. " not found. Quest may not be active.", "warn")
-				end
-			end,
-		})
-	end
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: QUEST
-	-- ══════════════════════════════════════════════════════════════════
-
-	local QuestTab = Window:AddTab({ Title = "Quest", Icon = "star" })
-
-	local questRunning = false
-	local questGen     = 0
-
-	QuestTab:AddParagraph({
-		Title   = "Missing Kids Quest",
-		Content = "Automatically collects all missing kids and returns them to the campfire.\nRequires an Old Sack in your inventory.",
-	})
-
-	local function runQuestLoop(gen)
-		local completed = 0
-		local total     = #QUEST_KIDS
-		for _, kid in ipairs(QUEST_KIDS) do
-			if not questRunning or questGen ~= gen then return end
-			if kid.approachPos then tpTo(kid.approachPos) end
-			task.wait(0.8)
-			local npc = nil
-			for _ = 1, 12 do
-				npc = getLiveNPC(kid.npcName)
-				if npc then break end
-				task.wait(0.5)
-			end
-			if not npc then task.wait(1) continue end
-			local npcPart = npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
-			if not npcPart then task.wait(1) continue end
-			tpTo(npcPart.Position + Vector3.new(0, 25, 0))
-			task.wait(0.5)
-			if not questRunning or questGen ~= gen then return end
-			local bag = getBag()
-			if not bag then
-				ShowNotif("Quest", "Old Sack not in Inventory!", "error")
-				task.wait(1)
-				continue
-			end
-			pcall(function() RequestBagStore:InvokeServer(bag, npc) end)
-			task.wait(1)
-			if not questRunning or questGen ~= gen then return end
-			local campPos = findCampfirePos()
-			if campPos then tpTo(campPos + Vector3.new(0, 6, 0)) end
-			task.wait(1)
-			if not questRunning or questGen ~= gen then return end
-			pcall(function() RequestBagDrop:FireServer(bag, npc, true) end)
-			task.wait(1)
-			if not questRunning or questGen ~= gen then return end
-			completed += 1
-		end
-		questRunning = false
-		ShowNotif("Quest", "Done! " .. completed .. "/" .. total .. " kids returned.", "success")
-	end
-
-	QuestTab:AddButton({
-		Title       = "Start Quest",
-		Description = "Auto-completes the Missing Kids quest",
-		Callback    = function()
-			if questRunning then ShowNotif("Quest", "Quest is already running!", "warn") return end
-			if not HRP or not HRP.Parent then ShowNotif("Quest", "Character not found.", "error") return end
-			questRunning = true
-			questGen     = questGen + 1
-			buildQuestKids()
-			local g = questGen
-			ShowNotif("Quest", "Starting Missing Kids quest...", "info")
-			task.spawn(function() runQuestLoop(g) end)
-		end,
-	})
-
-	QuestTab:AddButton({
-		Title       = "Stop Quest",
-		Description = "Stop the quest automation",
-		Callback    = function()
-			questRunning = false
-			questGen     = questGen + 1
-			ShowNotif("Quest", "Quest stopped.", "warn")
-		end,
-	})
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: MISC
-	-- ══════════════════════════════════════════════════════════════════
-
-	local MiscTab = Window:AddTab({ Title = "Misc", Icon = "settings" })
-
-	MiscTab:AddParagraph({ Title = "Player", Content = "Movement and physics tweaks." })
-
-	MiscTab:AddSlider("WalkSpeedSlider", {
-		Title    = "Walk Speed",
-		Min      = 0,
-		Max      = 100,
-		Default  = 16,
-		Rounding = 0,
-		Callback = function(v)
-			local char = Player.Character
-			if char then
-				local hum = char:FindFirstChildOfClass("Humanoid")
-				if hum then hum.WalkSpeed = v end
-			end
-		end,
-	})
-
-	local infiniteJump = false
-	MiscTab:AddToggle("InfiniteJumpToggle", {
-		Title    = "Infinite Jump",
-		Default  = false,
-		Callback = function(v)
-			infiniteJump = v
-		end,
-	})
-
-	UserInputService.JumpRequest:Connect(function()
-		if not infiniteJump then return end
-		local char = Player.Character
-		if char then
-			local hum = char:FindFirstChildOfClass("Humanoid")
-			if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
-		end
-	end)
-
-	MiscTab:AddToggle("NoclipToggle", {
-		Title    = "No Clip",
-		Default  = false,
-		Callback = function(v)
-			setNoclip(v)
-		end,
-	})
-
-	MiscTab:AddToggle("FlyToggle", {
-		Title    = "Fly",
-		Default  = false,
-		Callback = function(v)
-			if v then startFly() else stopFly() end
-		end,
-	})
-
-	MiscTab:AddSlider("FlySpeedSlider", {
-		Title    = "Fly Speed",
-		Min      = 10,
-		Max      = 300,
-		Default  = 60,
-		Rounding = 0,
-		Callback = function(v)
-			FLY_SPEED = v
-		end,
-	})
-
-	-- Tree ESP section
-	MiscTab:AddParagraph({ Title = "Tree ESP", Content = "Shows HP bars above trees in the world." })
-
-	MiscTab:AddToggle("EspToggle", {
-		Title    = "Tree ESP",
-		Default  = false,
-		Callback = function(v)
-			ESP_ENABLED = v
-			if not v then clearAllESP() end
-			ShowNotif("Tree ESP", v and "Tree ESP enabled." or "Tree ESP disabled.", v and "success" or "warn")
-		end,
-	})
-
-	MiscTab:AddDropdown("EspTreeDropdown", {
-		Title    = "Filter Tree Type",
-		Values   = scanTreeNames(),
-		Default  = "All Trees",
-		Callback = function(v)
-			ESP_SELECTED = (v == "All Trees") and nil or v
-			if ESP_ENABLED then clearAllESP() end
-		end,
-	})
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  TAB: CFG (Settings)
-	-- ══════════════════════════════════════════════════════════════════
-
-	local CfgTab = Window:AddTab({ Title = "Cfg", Icon = "sliders" })
-
-	CfgTab:AddParagraph({ Title = "Settings", Content = "Configure and save your hub settings." })
-
-	SaveManager:SetLibrary(Fluent)
-	InterfaceManager:SetLibrary(Fluent)
-	InterfaceManager:BuildInterfaceSection(CfgTab)
-	SaveManager:BuildConfigSection(CfgTab)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  KEYBOARD SHORTCUT — RightShift to toggle
-	-- ══════════════════════════════════════════════════════════════════
-
-	UserInputService.InputBegan:Connect(function(input, gpe)
-		if gpe then return end
-		if input.KeyCode == Enum.KeyCode.RightShift then
-			Window:ToggleVisibility()
-		end
-	end)
-
-	-- ══════════════════════════════════════════════════════════════════
-	-- //  AUTOLOAD CONFIG
-	-- ══════════════════════════════════════════════════════════════════
-
-	SaveManager:LoadAutoloadConfig()
-
-	-- ══════════════════════════════════════════════════════════════════
-	print("[ModernHub v2.0 Fluent] Loaded! Press RightShift to toggle.")
-	-- ══════════════════════════════════════════════════════════════════
 end
+
+local sg=ni("ScreenGui",{Name="MuslimHub",ResetOnSpawn=false},pGui)
+local mn=rk(1,ni("Frame",{Size=UDim2.new(0,GW,0,GH),Position=UDim2.new(.5,-GW/2,.5,-GH/2),BackgroundColor3=C.b1,BorderSizePixel=0,ClipsDescendants=true},sg)) cr(mn,12)
+
+-- ANIMATED STROKE
+local mnS=ni("UIStroke",{Thickness=1.5,Transparency=.08,Color=WH,ApplyStrokeMode=Enum.ApplyStrokeMode.Border},mn)
+mnG=ni("UIGradient",{Color=sCS(C),Rotation=0},mnS)
+task.spawn(function() while mn and mn.Parent do mnG.Rotation=0 TS:Create(mnG,TweenInfo.new(3.5,Enum.EasingStyle.Linear),{Rotation=360}):Play() task.wait(3.5) end end)
+
+local hdr=rk(2,ni("Frame",{Size=UDim2.new(1,0,0,TH),BackgroundColor3=C.b2,BackgroundTransparency=.2,BorderSizePixel=0,ZIndex=5},mn)) cr(hdr,12)
+rk(5,ni("Frame",{Size=UDim2.new(1,0,0,1),Position=UDim2.new(0,0,0,TH),BackgroundColor3=C.br,BorderSizePixel=0,ZIndex=5},mn))
+local tf=ni("Frame",{Size=UDim2.new(0,260,1,0),Position=UDim2.new(0,14,0,0),BackgroundTransparency=1,ZIndex=6},hdr)
+mdL=ni("TextLabel",{Size=UDim2.new(0,58,1,0),BackgroundTransparency=1,Text="MD |",TextColor3=C.a,TextSize=FS+4,Font=GF.t,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=6},tf)
+huL=ni("TextLabel",{Size=UDim2.new(0,80,1,0),Position=UDim2.new(0,38,0,0),BackgroundTransparency=1,Text="Hub",TextColor3=TX,TextSize=FS+4,Font=GF.t,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=6},tf)
+mdT=task.spawn(glow,mdL,C.mg,.6,.7)
+huT=task.spawn(function() task.wait(.35) glow(huL,C.hg,.6,.7) end)
+
+local function mkBtn(off,hc) local s=mob and 34 or 30 local b=ni("TextButton",{Size=UDim2.new(0,s,0,s),Position=UDim2.new(1,off,.5,-s/2),BackgroundTransparency=1,BackgroundColor3=C.b3,Text="",ZIndex=7},hdr) cr(b,7) b.MouseEnter:Connect(function() tw(b,.12,{BackgroundTransparency=0,BackgroundColor3=hc}) end) b.MouseLeave:Connect(function() tw(b,.12,{BackgroundTransparency=1}) end) return b end
+local cbtn,mbtn=mkBtn(mob and-40 or-36,Color3.fromRGB(200,55,55)),mkBtn(mob and-80 or-72,C.b3)
+local function mkL(p,r,s) local l=ni("Frame",{Size=UDim2.new(0,s or 14,0,2),AnchorPoint=Vector2.new(.5,.5),Position=UDim2.new(.5,0,.5,0),BackgroundColor3=DM,BorderSizePixel=0,Rotation=r or 0,ZIndex=8},p) cr(l,2) return l end
+local x1,x2=mkL(cbtn,45),mkL(cbtn,-45) cbtn.MouseEnter:Connect(function() tw(x1,.12,{BackgroundColor3=WH}) tw(x2,.12,{BackgroundColor3=WH}) end) cbtn.MouseLeave:Connect(function() tw(x1,.12,{BackgroundColor3=DM}) tw(x2,.12,{BackgroundColor3=DM}) end)
+local mln=mkL(mbtn,0) mbtn.MouseEnter:Connect(function() tw(mln,.12,{BackgroundColor3=WH}) end) mbtn.MouseLeave:Connect(function() tw(mln,.12,{BackgroundColor3=DM}) end)
+
+local floatBtn=ni("TextButton",{Size=UDim2.new(0,56,0,56),Position=UDim2.new(0,20,.5,-28),BackgroundColor3=C.a,BorderSizePixel=0,Text="MD",Font=GF.t,TextSize=16,TextColor3=WH,ZIndex=200,Visible=false},sg) cr(floatBtn,28) rk(6,floatBtn)
+ni("UIStroke",{Color=C.a,Thickness=2,Transparency=.3},floatBtn)
+
+local sd=rk(2,ni("Frame",{Size=UDim2.new(0,SW,1,0),BackgroundColor3=C.b2,BackgroundTransparency=.2,BorderSizePixel=0,ZIndex=3},mn)) cr(sd,12)
+rk(5,ni("Frame",{Size=UDim2.new(0,1,1,-(TH+1)),Position=UDim2.new(0,SW,0,TH+1),BackgroundColor3=C.br,BorderSizePixel=0,ZIndex=3},mn))
+local sdScr=ni("ScrollingFrame",{Size=UDim2.new(1,0,1,-(TH+11)),Position=UDim2.new(0,0,0,TH+11),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=0,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(0,0,0,0),ScrollingDirection=Enum.ScrollingDirection.Y,ClipsDescendants=true},sd)
+ni("UIListLayout",{SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,3)},sdScr) ni("UIPadding",{PaddingTop=UDim.new(0,4),PaddingLeft=UDim.new(0,8),PaddingRight=UDim.new(0,8),PaddingBottom=UDim.new(0,8)},sdScr)
+
+local ctArea=ni("Frame",{Size=UDim2.new(1,-(SW+1),1,-(TH+1)),Position=UDim2.new(0,SW+1,0,TH+1),BackgroundTransparency=1,BorderSizePixel=0,ZIndex=2,ClipsDescendants=true},mn)
+local ov=ni("Frame",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,ZIndex=50},mn)
+local pc=ni("Frame",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,ZIndex=2,ClipsDescendants=false},ctArea)
+
+local tl,pgs,tb,cur={{"Hub","H"},{"Farm","F"},{"Camp","C"},{"Items","I"},{"Loot","$"},{"Craft","K"},{"World","W"},{"Player","P"},{"ESP","E"},{"Config","G"}},{},{},nil
+for i,v in ipairs(tl) do
+	local nm,ic=v[1],v[2]
+	local pg=rk(8,ni("ScrollingFrame",{Name=nm,Size=UDim2.new(1,-20,1,-8),Position=UDim2.new(0,8,0,8),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=C.a,Visible=false,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(0,0,0,0),ZIndex=2,ClipsDescendants=false},pc))
+	ni("UIListLayout",{Padding=UDim.new(0,6),SortOrder=Enum.SortOrder.LayoutOrder},pg) ni("UIPadding",{PaddingRight=UDim.new(0,12)},pg) pgs[nm]=pg
+	local b=ni("TextButton",{Size=UDim2.new(1,0,0,mob and 36 or 32),BackgroundColor3=C.e,BackgroundTransparency=1,Text="",LayoutOrder=i,ZIndex=4},sdScr) cr(b,6)
+	local bar=rk(6,ni("Frame",{Size=UDim2.new(0,3,1,-10),Position=UDim2.new(0,0,0,5),BackgroundColor3=C.a,BackgroundTransparency=1,BorderSizePixel=0,ZIndex=5},b)) cr(bar,2)
+	local ibg=rk(3,ni("Frame",{Size=UDim2.new(0,20,0,20),Position=UDim2.new(0,8,.5,-10),BackgroundColor3=C.b3,BackgroundTransparency=.5,BorderSizePixel=0,ZIndex=5},b)) cr(ibg,10)
+	local tic=ni("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=ic,TextColor3=DM,TextSize=FS-1,Font=GF.t,ZIndex=6},ibg)
+	local tnm=ni("TextLabel",{Size=UDim2.new(1,-38,1,0),Position=UDim2.new(0,34,0,0),BackgroundTransparency=1,Text=nm,TextColor3=DM,TextSize=FS,Font=GF.t,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=5},b)
+	shT[nm]={on=false,th=nil,ic=tic,nm=tnm}
+	local function ss() shT[nm].on=true if shT[nm].th then task.cancel(shT[nm].th) end shT[nm].th=task.spawn(function() local idx=1 while true do tw(tic,.4,{TextColor3=C.ts[idx]}) tw(tnm,.4,{TextColor3=C.ts[idx]}) task.wait(.5) idx=idx%#C.ts+1 end end) end
+	local function sp() shT[nm].on=false if shT[nm].th then task.cancel(shT[nm].th) shT[nm].th=nil end tw(tic,.2,{TextColor3=DM}) tw(tnm,.2,{TextColor3=DM}) end
+	tb[nm]={b=b,bar=bar,ss=ss,sp=sp}
+	b.MouseButton1Click:Connect(function() if cur==nm then return end if adc then adc() end for x,d in pairs(tb) do d.sp() tw(d.b,.2,{BackgroundTransparency=1}) tw(d.bar,.15,{BackgroundTransparency=1,Size=UDim2.new(0,3,0,0)}) pgs[x].Visible=false end tw(b,.25,{BackgroundTransparency=.3}) bar.Size,bar.BackgroundTransparency=UDim2.new(0,3,0,0),0 TS:Create(bar,TweenInfo.new(.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Size=UDim2.new(0,3,1,-10)}):Play() pgs[nm].Visible=true ss() cur=nm end)
+	b.MouseEnter:Connect(function() if cur~=nm then tw(b,.15,{BackgroundTransparency=.5}) tw(tic,.2,{TextColor3=Color3.fromRGB(190,200,220)}) tw(tnm,.2,{TextColor3=Color3.fromRGB(190,200,220)}) end end)
+	b.MouseLeave:Connect(function() if cur~=nm then tw(b,.15,{BackgroundTransparency=1}) tw(tic,.2,{TextColor3=DM}) tw(tnm,.2,{TextColor3=DM}) end end)
+end
+tb.Hub.b.BackgroundTransparency,tb.Hub.bar.BackgroundTransparency=.3,0 pgs.Hub.Visible=true cur="Hub" tb.Hub.ss()
+
+local function sec(pg,t,o) local h=ni("Frame",{Size=UDim2.new(1,0,0,28),BackgroundTransparency=1,LayoutOrder=o or 0},pg) local l=ni("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=t,TextColor3=C.a,TextSize=FS+1,Font=GF.t,TextXAlignment=Enum.TextXAlignment.Left},h) rk(5,ni("Frame",{Size=UDim2.new(1,0,0,1),Position=UDim2.new(0,0,1,-2),BackgroundColor3=C.br,BorderSizePixel=0},h)) task.spawn(function() local i=1 while l and l.Parent do tw(l,.5,{TextColor3=C.mg[i]}) task.wait(.6) i=i%#C.mg+1 end end) end
+local function inf(pg,t,o) ni("TextLabel",{Size=UDim2.new(1,0,0,20),BackgroundTransparency=1,Text=t,TextColor3=DM,TextSize=FS-1,Font=GF.d,TextXAlignment=Enum.TextXAlignment.Left,TextWrapped=true,AutomaticSize=Enum.AutomaticSize.Y,LayoutOrder=o or 0},pg) end
+local function btn(pg,t,o,fn) local h=rk(4,ni("Frame",{Size=UDim2.new(1,0,0,EH),BackgroundColor3=C.e,BackgroundTransparency=.3,BorderSizePixel=0,LayoutOrder=o or 0,ZIndex=3},pg)) cr(h,6) local s=rk(5,ni("UIStroke",{Color=C.br,Thickness=1},h)) ni("TextLabel",{Size=UDim2.new(1,-16,1,0),Position=UDim2.new(0,12,0,0),BackgroundTransparency=1,Text=t,TextColor3=TX,TextSize=FS,Font=GF.t,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=4},h) local c=ni("TextButton",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="",ZIndex=5},h) c.MouseEnter:Connect(function() tw(h,.12,{BackgroundTransparency=.1}) tw(s,.12,{Color=C.a}) end) c.MouseLeave:Connect(function() tw(h,.12,{BackgroundTransparency=.3}) tw(s,.12,{Color=C.br}) end) c.MouseButton1Click:Connect(function() tw(h,.06,{BackgroundColor3=C.a,BackgroundTransparency=.2}) task.wait(.1) tw(h,.15,{BackgroundColor3=C.e,BackgroundTransparency=.3}) if fn then fn() end end) end
+local function tog(pg,t,o,d,fn) local on=d or false local h=rk(4,ni("Frame",{Size=UDim2.new(1,0,0,EH),BackgroundColor3=C.e,BackgroundTransparency=.3,BorderSizePixel=0,LayoutOrder=o or 0,ZIndex=3},pg)) cr(h,6) local s=rk(5,ni("UIStroke",{Color=C.br,Thickness=1},h)) ni("TextLabel",{Size=UDim2.new(1,-65,1,0),Position=UDim2.new(0,12,0,0),BackgroundTransparency=1,Text=t,TextColor3=TX,TextSize=FS,Font=GF.b,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=4},h) local tW,tH,kS=mob and 44 or 40,mob and 24 or 22,(mob and 24 or 22)-4 local r=rk(3,ni("Frame",{Size=UDim2.new(0,tW,0,tH),Position=UDim2.new(1,-(tW+12),.5,-tH/2),BackgroundColor3=C.b3,BorderSizePixel=0,ZIndex=4},h)) cr(r,99) local k=ni("Frame",{Size=UDim2.new(0,kS,0,kS),Position=UDim2.new(0,2,.5,-kS/2),BackgroundColor3=Color3.fromRGB(170,170,180),BorderSizePixel=0,ZIndex=5},r) cr(k,99) local function u(a) local ii=a and TweenInfo.new(.2) or TweenInfo.new(0) TS:Create(r,ii,{BackgroundColor3=on and C.a or C.b3}):Play() TS:Create(k,ii,{Position=UDim2.new(0,on and tW-kS-2 or 2,.5,-kS/2),BackgroundColor3=on and WH or Color3.fromRGB(170,170,180)}):Play() TS:Create(s,ii,{Color=on and C.a or C.br}):Play() end u(false) ni("TextButton",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="",ZIndex=6},h).MouseButton1Click:Connect(function() on=not on u(true) if fn then fn(on) end end) end
+local function sld(pg,t,mi,ma,df,o,fn) local v,pc=df or mi,((df or mi)-mi)/(ma-mi) local h=rk(4,ni("Frame",{Size=UDim2.new(1,0,0,EH+20),BackgroundColor3=C.e,BackgroundTransparency=.3,BorderSizePixel=0,LayoutOrder=o or 0,ZIndex=3},pg)) cr(h,6) local s=rk(5,ni("UIStroke",{Color=C.br,Thickness=1},h)) ni("TextLabel",{Size=UDim2.new(.65,-12,0,EH-4),Position=UDim2.new(0,12,0,3),BackgroundTransparency=1,Text=t,TextColor3=TX,TextSize=FS,Font=GF.b,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=4},h) local vB=rk(3,ni("Frame",{Size=UDim2.new(0,44,0,20),Position=UDim2.new(1,-52,0,5),BackgroundColor3=C.b3,BackgroundTransparency=.3,BorderSizePixel=0,ZIndex=4},h)) cr(vB,6) rk(7,ni("UIStroke",{Color=C.a,Thickness=1,Transparency=.5},vB)) local vl=ni("TextLabel",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text=tostring(v),TextColor3=TX,TextSize=FS,Font=GF.t,ZIndex=5},vB) local tk=rk(3,ni("Frame",{Size=UDim2.new(1,-24,0,4),Position=UDim2.new(0,12,0,EH+4),BackgroundColor3=C.b3,BorderSizePixel=0,ZIndex=4},h)) cr(tk,99) local fl=rk(6,ni("Frame",{Size=UDim2.new(pc,0,1,0),BackgroundColor3=C.a,BorderSizePixel=0,ZIndex=5},tk)) cr(fl,99) local kS=14 local kb=ni("Frame",{Size=UDim2.new(0,kS,0,kS),AnchorPoint=Vector2.new(.5,.5),Position=UDim2.new(pc,0,.5,0),BackgroundColor3=WH,BorderSizePixel=0,ZIndex=7},tk) cr(kb,99) rk(7,ni("UIStroke",{Color=C.a,Thickness=2,Transparency=.15},kb)) local dr=false local function upd(ix) local tp,ts=tk.AbsolutePosition.X,tk.AbsoluteSize.X if ts<1 then return end local x=math.clamp((ix-tp)/ts,0,1) v=math.floor(mi+x*(ma-mi)+.5) local p2=(v-mi)/(ma-mi) tw(fl,.05,{Size=UDim2.new(p2,0,1,0)}) tw(kb,.05,{Position=UDim2.new(p2,0,.5,0)}) vl.Text=tostring(v) if fn then fn(v) end end local hit=ni("TextButton",{Size=UDim2.new(1,-16,0,28),Position=UDim2.new(0,8,0,EH-4),BackgroundTransparency=1,Text="",ZIndex=9},h) hit.InputBegan:Connect(function(ii) if ii.UserInputType==Enum.UserInputType.MouseButton1 or ii.UserInputType==Enum.UserInputType.Touch then dr=true upd(ii.Position.X) tw(s,.1,{Color=C.a}) end end) UIS.InputChanged:Connect(function(ii) if dr and(ii.UserInputType==Enum.UserInputType.MouseMovement or ii.UserInputType==Enum.UserInputType.Touch) then upd(ii.Position.X) end end) UIS.InputEnded:Connect(function(ii) if dr then dr=false tw(s,.15,{Color=C.br}) end end) end
+
+local function dd(pg,t,opF,o,d,fn) local op,iH,isF=false,mob and 36 or 32,type(opF)=="function" local cO=isF and(opF() or{}) or(opF or{}) local sel=d local c2=ni("Frame",{Size=UDim2.new(1,0,0,EH),BackgroundTransparency=1,LayoutOrder=o or 0,ZIndex=3,ClipsDescendants=false},pg) local m=rk(4,ni("Frame",{Size=UDim2.new(1,0,0,EH),BackgroundColor3=C.e,BackgroundTransparency=.3,BorderSizePixel=0,ZIndex=10},c2)) cr(m,6) local ms=rk(5,ni("UIStroke",{Color=C.br,Thickness=1},m)) ni("TextLabel",{Size=UDim2.new(.45,-10,1,0),Position=UDim2.new(0,12,0,0),BackgroundTransparency=1,Text=t,TextColor3=TX,TextSize=FS,Font=GF.b,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=11},m) local vlb=ni("TextLabel",{Size=UDim2.new(.55,-30,1,0),Position=UDim2.new(.45,0,0,0),BackgroundTransparency=1,Text=sel or"...",TextColor3=sel and TX or DM,TextSize=FS,Font=GF.b,TextXAlignment=Enum.TextXAlignment.Right,ZIndex=11},m) local ah=ni("Frame",{Size=UDim2.new(0,16,0,16),Position=UDim2.new(1,-22,.5,-8),BackgroundTransparency=1,ZIndex=11},m) ni("Frame",{Size=UDim2.new(0,7,0,2),AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(.5,0,.5,0),BackgroundColor3=DM,BorderSizePixel=0,Rotation=45,ZIndex=12},ah) ni("Frame",{Size=UDim2.new(0,7,0,2),AnchorPoint=Vector2.new(0,.5),Position=UDim2.new(.5,0,.5,0),BackgroundColor3=DM,BorderSizePixel=0,Rotation=-45,ZIndex=12},ah) local df=rk(2,ni("Frame",{BackgroundColor3=C.b2,BorderSizePixel=0,Visible=false,ZIndex=55,ClipsDescendants=true},ov)) cr(df,6) ni("UIStroke",{Color=C.a,Thickness=1,Transparency=.5},df) local ds=rk(8,ni("ScrollingFrame",{Size=UDim2.new(1,-4,1,-4),Position=UDim2.new(0,2,0,2),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=C.a,AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.new(0,0,0,0),ZIndex=56},df)) ni("UIListLayout",{Padding=UDim.new(0,2),SortOrder=Enum.SortOrder.LayoutOrder},ds) ni("UIPadding",{PaddingTop=UDim.new(0,4),PaddingBottom=UDim.new(0,4),PaddingLeft=UDim.new(0,4),PaddingRight=UDim.new(0,4)},ds) local bk=ni("TextButton",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="",ZIndex=52,Visible=false},ov) local obs,cl={},nil local function build() for _,b in pairs(obs) do b:Destroy() end obs={} if #cO==0 then local ob=ni("TextButton",{Size=UDim2.new(1,0,0,iH),BackgroundColor3=C.b3,BackgroundTransparency=.1,Text="No options",TextColor3=DM,TextSize=FS,Font=GF.d,AutoButtonColor=false,ZIndex=58},ds) cr(ob,6) table.insert(obs,ob) return end for idx,opt in ipairs(cO) do local is=opt==sel local ob=ni("TextButton",{Size=UDim2.new(1,0,0,iH),BackgroundColor3=is and C.a or C.b3,BackgroundTransparency=is and.6 or.1,Text=opt,TextColor3=is and WH or TX,TextSize=FS,Font=is and GF.t or GF.b,AutoButtonColor=false,LayoutOrder=idx,ZIndex=58},ds) cr(ob,6) if is then ni("TextLabel",{Size=UDim2.new(0,20,1,0),Position=UDim2.new(1,-28,0,0),BackgroundTransparency=1,Text="✓",TextColor3=C.a,TextSize=FS,Font=GF.t,ZIndex=59},ob) end ob.MouseEnter:Connect(function() if opt~=sel then tw(ob,.1,{BackgroundColor3=C.e,BackgroundTransparency=0}) end end) ob.MouseLeave:Connect(function() if opt~=sel then tw(ob,.1,{BackgroundColor3=C.b3,BackgroundTransparency=.1}) end end) ob.MouseButton1Click:Connect(function() sel=opt vlb.Text,vlb.TextColor3=sel,TX cl() if fn then fn(sel) end end) table.insert(obs,ob) end end cl=function() if not op then return end op=false tw(ah,.2,{Rotation=0}) tw(ms,.15,{Color=C.br}) TS:Create(df,TweenInfo.new(.15),{Size=UDim2.new(0,df.Size.X.Offset,0,0),BackgroundTransparency=1}):Play() task.delay(.15,function() df.Visible,bk.Visible=false,false end) if adc==cl then adc=nil end end local function opn() if adc and adc~=cl then adc() end op,adc=true,cl if isF then cO=opF() or{} end build() local ap,as,op2=m.AbsolutePosition,m.AbsoluteSize,ov.AbsolutePosition local lH=math.min(math.max(#cO,1),5)*(iH+2)+10 local xx,yy=ap.X-op2.X,ap.Y-op2.Y+as.Y+4 if yy+lH>ov.AbsoluteSize.Y then yy=ap.Y-op2.Y-lH-4 end df.Position,df.Size,df.BackgroundTransparency,df.Visible,bk.Visible=UDim2.new(0,xx,0,yy),UDim2.new(0,as.X,0,0),1,true,true tw(ah,.2,{Rotation=180}) tw(ms,.15,{Color=C.a}) TS:Create(df,TweenInfo.new(.2),{Size=UDim2.new(0,as.X,0,lH),BackgroundTransparency=0}):Play() end ni("TextButton",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="",ZIndex=12},m).MouseButton1Click:Connect(function() if op then cl() else opn() end end) bk.MouseButton1Click:Connect(cl) m.MouseEnter:Connect(function() if not op then tw(m,.1,{BackgroundTransparency=.1}) tw(ms,.1,{Color=C.a}) end end) m.MouseLeave:Connect(function() if not op then tw(m,.1,{BackgroundTransparency=.3}) tw(ms,.1,{Color=C.br}) end end) if isF then task.spawn(function() while c2 and c2.Parent do task.wait(1) local ok,nO=pcall(opF) cO=ok and nO or{} if sel then local f=false for _,v in ipairs(cO) do if v==sel then f=true break end end if not f then sel=nil vlb.Text,vlb.TextColor3="...",DM if fn then pcall(fn,nil) end end end if op and df.Visible then build() tw(df,.15,{Size=UDim2.new(0,m.AbsoluteSize.X,0,math.min(math.max(#cO,1),5)*(iH+2)+10)}) end end end) end end
+
+local function Notif(ti,ms,k) local cols={info=C.a,success=Color3.fromRGB(34,197,94),error=Color3.fromRGB(220,50,50),warn=Color3.fromRGB(234,179,8)} local ac=cols[k] or cols.info local nf=ni("Frame",{Size=UDim2.new(0,260,0,56),Position=UDim2.new(1,10,1,-72),BackgroundColor3=C.b1,BorderSizePixel=0,ZIndex=200},sg) cr(nf,10) ni("UIStroke",{Color=ac,Thickness=1.5},nf) ni("Frame",{Size=UDim2.new(0,3,1,-12),Position=UDim2.new(0,6,0,6),BackgroundColor3=ac,BorderSizePixel=0,ZIndex=201},nf) ni("TextLabel",{Size=UDim2.new(1,-24,0,18),Position=UDim2.new(0,16,0,8),BackgroundTransparency=1,Text=ti,TextColor3=TX,Font=GF.t,TextSize=13,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=201},nf) ni("TextLabel",{Size=UDim2.new(1,-24,0,14),Position=UDim2.new(0,16,0,28),BackgroundTransparency=1,Text=ms,TextColor3=DM,Font=GF.d,TextSize=11,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=201},nf) TS:Create(nf,TweenInfo.new(.35,Enum.EasingStyle.Quint),{Position=UDim2.new(1,-280,1,-72)}):Play() task.delay(3,function() TS:Create(nf,TweenInfo.new(.3),{Position=UDim2.new(1,10,1,-72)}):Play() task.delay(.35,function() nf:Destroy() end) end) end
+
+-- PAGES
+sec(pgs.Hub,"Welcome",1) inf(pgs.Hub,"MD Hub v2.1 — Quest v7",2) btn(pgs.Hub,"Copy Discord",3,function() pcall(function() setclipboard("discord.gg/escypvhJHu") end) Notif("Discord","Copied!","success") end)
+sec(pgs.Farm,"Chopping",1) tog(pgs.Farm,"Auto Cut",2,false,function(v) CFG.ENABLED=v Notif("Cut",v and"ON"or"OFF",v and"success"or"warn") end) sld(pgs.Farm,"Range",0,100,80,3,function(v) CFG.CUT_RANGE=v end) sec(pgs.Farm,"Kill",4) tog(pgs.Farm,"Kill Aura",5,false,function(v) KILL.ENABLED=v Notif("Kill",v and"ON"or"OFF",v and"success"or"warn") end) sld(pgs.Farm,"Kill Range",5,150,30,6,function(v) KILL.RANGE=v end)
+sec(pgs.Camp,"Campfire",1) sld(pgs.Camp,"Height",5,15,10,2,function(v) CAMP.HEIGHT=math.floor((v/5)+.5)*5 end) btn(pgs.Camp,"Bring Logs",3,function() local l=getLogs() for _,lm in ipairs(l) do local m=lm:FindFirstChild("Main") or lm:FindFirstChildWhichIsA("BasePart",true) if m then m.CFrame=HRP.CFrame*CFrame.new(math.random(-3,3),15,math.random(-3,3)) pcall(function() ReqDrag:FireServer(lm) end) end end Notif("Logs",#l.." brought","success") end) btn(pgs.Camp,"TP Camp",4,function() local p=campPos() if p then tpTo(p+Vector3.new(0,5,0)) Notif("TP","Done","success") else Notif("TP","No camp","error") end end) tog(pgs.Camp,"Auto Level",5,false,function(v) CAMP.AUTO=v if v then task.spawn(function() while CAMP.AUTO do for _,i in ipairs(getFuel()) do if not CAMP.AUTO then break end dragToCamp(i) end task.wait(3) end end) end Notif("Level",v and"ON"or"OFF",v and"success"or"warn") end)
+sec(pgs.Items,"Bring",1) dd(pgs.Items,"Item",scanItems,2,nil,function(v) BRING_ITEM=v end) btn(pgs.Items,"Bring Item",3,function() if BRING_ITEM then bringName(BRING_ITEM) Notif("Brought",BRING_ITEM,"success") else Notif("","Select","warn") end end) dd(pgs.Items,"Food",function() return scanByList(FOOD) end,4,nil,function(v) BRING_FOOD=v end) btn(pgs.Items,"Bring Food",5,function() if BRING_FOOD then bringName(BRING_FOOD) Notif("Brought",BRING_FOOD,"success") else Notif("","Select","warn") end end) btn(pgs.Items,"Bring All",6,function() local f=workspace:FindFirstChild("Items") if not f then return end local c=0 for _,ch in pairs(f:GetChildren()) do local p=ch:FindFirstChildWhichIsA("BasePart",true) if p then p.CFrame=HRP.CFrame*CFrame.new(math.random(-8,8),math.random(20,45),math.random(-8,8)) pcall(function() ReqDrag:FireServer(ch) end) c+=1 end end Notif("Items",c.." brought","success") end) sec(pgs.Items,"Gear",7) dd(pgs.Items,"Gear",function() return scanByList(GEAR) end,8,nil,function(v) BRING_GEAR=v end) dd(pgs.Items,"Weapon",function() return scanByList(WEAP) end,9,nil,function(v) BRING_WEAP=v end) btn(pgs.Items,"Bring Gear",10,function() if BRING_GEAR then bringName(BRING_GEAR) Notif("Gear",BRING_GEAR,"success") else Notif("","Select","warn") end end) btn(pgs.Items,"Bring Weapon",11,function() if BRING_WEAP then bringName(BRING_WEAP) Notif("Weapon",BRING_WEAP,"success") else Notif("","Select","warn") end end)
+sec(pgs.Loot,"Coins",1) tog(pgs.Loot,"Auto Coins",2,false,function(v) if v then startCoins() else coinRun=false end Notif("Coins",v and"ON"or"OFF",v and"success"or"warn") end) sec(pgs.Loot,"Chests",3) btn(pgs.Loot,"Open Chests",4,function() Notif("Chests","Opening...","info") task.spawn(function() local o,b=openChests() Notif("Chests","Open:"..o.." Loot:"..b,"success") end) end) tog(pgs.Loot,"Auto Chests",5,false,function(v) if v then startAutoChest() else autoChest=false end Notif("Chests",v and"ON"or"OFF",v and"success"or"warn") end)
+sec(pgs.Craft,"Crafting",1) dd(pgs.Craft,"Blueprint",getBPNames(),2,nil,function(v) SEL_CRAFT=getBPByLbl(v) end) local function tryCraft() if not SEL_CRAFT then Notif("Craft","Select","warn") return end local s=false pcall(function() s=CraftRemote:InvokeServer(SEL_CRAFT.N)==true end) Notif("Craft",s and SEL_CRAFT.N.." done"or"Failed",s and"success"or"error") end btn(pgs.Craft,"Craft",3,tryCraft) local acG=0 tog(pgs.Craft,"Auto Craft",4,false,function(v) AUTO_CRAFT=v if v then acG+=1 local g=acG task.spawn(function() while AUTO_CRAFT and acG==g do pcall(tryCraft) task.wait(3) end end) end Notif("Craft",v and"ON"or"OFF",v and"success"or"warn") end) sec(pgs.Craft,"Grinder",5) dd(pgs.Craft,"Grind Item",scanGrind,6,nil,function(v) GRIND_ITEM=v end) local function doGrind() if not GRIND_ITEM then return 0 end local f=workspace:FindFirstChild("Items") if not f then return 0 end local d=0 for _,c in pairs(f:GetChildren()) do if c.Name==GRIND_ITEM then local p=c.PrimaryPart or c:FindFirstChildWhichIsA("BasePart",true) if p then p.CFrame=SCRAPPER*CFrame.new(math.random(-1,1)*.3,1.5,math.random(-1,1)*.3) pcall(function() ReqDrag:FireServer(c) end) d+=1 end end end return d end btn(pgs.Craft,"Grind",7,function() local n=doGrind() Notif("Grind",n>0 and n.." sent"or"None",n>0 and"success"or"warn") end) local agG=0 tog(pgs.Craft,"Auto Grind",8,false,function(v) AUTO_GRIND=v if v then agG+=1 local g=agG task.spawn(function() while AUTO_GRIND and agG==g do pcall(doGrind) task.wait(2) end end) end Notif("Grind",v and"ON"or"OFF",v and"success"or"warn") end)
+sec(pgs.World,"Teleport",1) do local MS=nil dd(pgs.World,"Location",scanLocNames,2,nil,function(v) if v then for _,l in ipairs(scanLocs()) do if l.Name==v then MS=l break end end else MS=nil end end) btn(pgs.World,"TP Location",3,function() if MS then tpTo(MS.Pos+Vector3.new(0,3,0)) Notif("TP",MS.Name,"success") else Notif("","Select","warn") end end) btn(pgs.World,"TP Camp",4,function() local p=campPos() if p then tpTo(p+Vector3.new(0,5,0)) Notif("TP","Camp","success") else Notif("TP","No camp","error") end end) end
+sec(pgs.World,"Quest v7",5) inf(pgs.World,"Phase1:Load Phase2:Grab+Drop",6) dd(pgs.World,"Sack",scanSacks,7,nil,function() end) btn(pgs.World,"Start Quest",8,function() if questRun then Notif("Quest","Running","warn") return end local bg=getBag() if not bg then Notif("Quest","No bag","error") return end if not campPos() then Notif("Quest","No camp","error") return end Notif("Quest","Starting...","info") task.spawn(function() local d,f,s=runQuest() if type(d)=="string" then Notif("Quest",d,"error") else Notif("Quest","Done:"..d.." Fail:"..f.." Skip:"..s,"success") end end) end) btn(pgs.World,"Stop Quest",9,function() stopQuest() Notif("Quest","Stopped","warn") end) tog(pgs.World,"Auto Loop",10,false,function() local on=togAutoQuest() Notif("Quest",on and"Loop ON"or"Loop OFF",on and"success"or"warn") end) sec(pgs.World,"Kids TP",11) for i=1,4 do btn(pgs.World,"TP>"..KID_LBL[i],11+i,function() local ch=workspace:FindFirstChild("Characters") if ch then local n=ch:FindFirstChild(KID_NPC[i]) if n then local p=n:FindFirstChild("HumanoidRootPart") or n.PrimaryPart if p then tpTo(p.Position) Notif("TP",KID_LBL[i],"success") return end end end Notif("TP","Not found","warn") end) end
+sec(pgs.Player,"Movement",1) sld(pgs.Player,"Speed",0,100,16,2,function(v) local c=P.Character if c then local h=c:FindFirstChildOfClass("Humanoid") if h then h.WalkSpeed=v end end end) tog(pgs.Player,"Inf Jump",3,false,function(v) infJump=v end) tog(pgs.Player,"NoClip",4,false,function(v) setNoclip(v) end) tog(pgs.Player,"Fly",5,false,function(v) if v then startFly() else stopFly() end end) sld(pgs.Player,"Fly Speed",10,300,60,6,function(v) FLY_SPD=v end) sec(pgs.Player,"TP Players",7) do local TP=nil dd(pgs.Player,"Player",scanPlayers,8,nil,function(v) TP=v end) btn(pgs.Player,"TP to Player",9,function() if not TP then Notif("TP","Select","warn") return end local t=Players:FindFirstChild(TP) if t and t.Character then local h=t.Character:FindFirstChild("HumanoidRootPart") if h then tpTo(h.Position+Vector3.new(0,3,0)) Notif("TP",TP,"success") return end end Notif("TP","Not found","error") end) end
+sec(pgs.ESP,"Tree ESP",1) tog(pgs.ESP,"Tree ESP",2,false,function(v) ESP_ON=v if not v then clearESP() end Notif("ESP",v and"ON"or"OFF",v and"success"or"warn") end) dd(pgs.ESP,"Filter",scanTrees,3,nil,function(v) ESP_SEL=v if ESP_ON then clearESP() end end)
+sec(pgs.Config,"Theme",1) dd(pgs.Config,"Theme",{"Purple","Blue","Red","Green","Orange","Cyan","Pink"},2,"Purple",function(v) local map={Purple="P",Blue="B",Red="R",Green="G",Orange="O",Cyan="C",Pink="K"} if Th[map[v]] then aT(Th[map[v]]) end end) btn(pgs.Config,"Destroy GUI",3,function() sg:Destroy() end)
+
+-- DRAG/MIN/CLOSE
+do local dg,di,ds,sp hdr.InputBegan:Connect(function(ii) if ii.UserInputType==Enum.UserInputType.MouseButton1 or ii.UserInputType==Enum.UserInputType.Touch then dg,ds,sp=true,ii.Position,mn.Position ii.Changed:Connect(function() if ii.UserInputState==Enum.UserInputState.End then dg=false end end) end end) hdr.InputChanged:Connect(function(ii) if ii.UserInputType==Enum.UserInputType.MouseMovement or ii.UserInputType==Enum.UserInputType.Touch then di=ii end end) UIS.InputChanged:Connect(function(ii) if ii==di and dg then local d=ii.Position-ds mn.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y) end end) end
+local full=UDim2.new(0,GW,0,GH)
+local function doMin() if adc then adc() end TS:Create(mn,TweenInfo.new(.25),{Size=UDim2.new(0,0,0,0),Position=UDim2.new(mn.Position.X.Scale,mn.Position.X.Offset+GW/2,mn.Position.Y.Scale,mn.Position.Y.Offset+GH/2)}):Play() task.delay(.25,function() mn.Visible,floatBtn.Visible=false,true end) end
+local function doRes() floatBtn.Visible,mn.Visible,mn.Size=false,true,UDim2.new(0,0,0,0) local ss=sg.AbsoluteSize mn.Position=UDim2.new(0,ss.X/2,0,ss.Y/2) TS:Create(mn,TweenInfo.new(.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Size=full,Position=UDim2.new(0,ss.X/2-GW/2,0,ss.Y/2-GH/2)}):Play() end
+mbtn.MouseButton1Click:Connect(doMin) cbtn.MouseButton1Click:Connect(function() if adc then adc() end TS:Create(mn,TweenInfo.new(.2),{Size=UDim2.new(0,0,0,0)}):Play() task.wait(.25) sg:Destroy() end) floatBtn.MouseButton1Click:Connect(doRes)
+mn.Size=UDim2.new(0,GW,0,0) TS:Create(mn,TweenInfo.new(.35,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Size=full}):Play()
+print("[MD Hub v2.1] Loaded — Animated Stroke + Theme Sync")
