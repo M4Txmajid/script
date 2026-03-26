@@ -1,4 +1,4 @@
--- MD Hub v2.1 Optimized + Animated Stroke + Theme Sync
+
 local Players,UIS,TS,RS,CS,RunService=game:GetService("Players"),game:GetService("UserInputService"),game:GetService("TweenService"),game:GetService("ReplicatedStorage"),game:GetService("CollectionService"),game:GetService("RunService")
 local P,pGui,Character,HRP=Players.LocalPlayer,Players.LocalPlayer:WaitForChild("PlayerGui"),(Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()),nil
 HRP=Character:WaitForChild("HumanoidRootPart")
@@ -86,7 +86,6 @@ local GF,TX,DM,WH={t=Enum.Font.FredokaOne,b=Enum.Font.GothamSemibold,d=Enum.Font
 local GW,GH,SW,TH,EH,FS=mob and 420 or 580,mob and 420 or 480,mob and 115 or 145,mob and 42 or 40,mob and 40 or 36,mob and 14 or 13
 local SEL_CRAFT,AUTO_CRAFT,AUTO_GRIND,GRIND_ITEM,BRING_ITEM,BRING_FOOD,BRING_GEAR,BRING_WEAP=nil,false,false,nil,nil,nil,nil,nil
 
--- THEMES WITH FULL COLORS
 local Th={
 	P={a=Color3.fromRGB(160,80,240),ad=Color3.fromRGB(110,50,190),b1=Color3.fromRGB(14,10,22),b2=Color3.fromRGB(20,14,30),b3=Color3.fromRGB(28,18,42),e=Color3.fromRGB(36,22,52),br=Color3.fromRGB(50,30,70),mg={Color3.fromRGB(160,80,240),Color3.fromRGB(180,110,255),Color3.fromRGB(200,150,255),Color3.fromRGB(220,190,255),Color3.fromRGB(200,150,255),Color3.fromRGB(180,110,255)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(210,170,255),Color3.fromRGB(185,130,255),Color3.fromRGB(160,80,240),Color3.fromRGB(185,130,255),Color3.fromRGB(210,170,255)},ts={Color3.fromRGB(200,150,255),Color3.fromRGB(220,180,255),Color3.fromRGB(170,110,240),Color3.fromRGB(240,210,255)}},
 	B={a=Color3.fromRGB(90,120,255),ad=Color3.fromRGB(60,90,200),b1=Color3.fromRGB(15,15,20),b2=Color3.fromRGB(22,22,28),b3=Color3.fromRGB(30,30,38),e=Color3.fromRGB(40,40,45),br=Color3.fromRGB(48,48,60),mg={Color3.fromRGB(90,120,255),Color3.fromRGB(120,160,255),Color3.fromRGB(160,200,255),Color3.fromRGB(200,230,255),Color3.fromRGB(160,200,255),Color3.fromRGB(120,160,255)},hg={Color3.fromRGB(235,235,240),Color3.fromRGB(180,210,255),Color3.fromRGB(140,185,255),Color3.fromRGB(100,160,255),Color3.fromRGB(140,185,255),Color3.fromRGB(180,210,255)},ts={Color3.fromRGB(140,200,255),Color3.fromRGB(180,220,255),Color3.fromRGB(100,180,255),Color3.fromRGB(200,235,255)}},
@@ -104,13 +103,9 @@ local function ni(c,p,r) local o=Instance.new(c) for k,v in pairs(p or{}) do o[k
 local function cr(o,r) ni("UICorner",{CornerRadius=UDim.new(0,r or 6)},o) end
 local function rk(i,o) table.insert(Reg[i],o) return o end
 
--- COLOR SEQUENCE FOR ANIMATED STROKE
 local function sCS(t) return ColorSequence.new({ColorSequenceKeypoint.new(0,t.a),ColorSequenceKeypoint.new(.15,t.br),ColorSequenceKeypoint.new(.42,t.ad),ColorSequenceKeypoint.new(.48,t.mg[3]),ColorSequenceKeypoint.new(.5,t.mg[4]),ColorSequenceKeypoint.new(.52,t.mg[3]),ColorSequenceKeypoint.new(.58,t.ad),ColorSequenceKeypoint.new(.85,t.br),ColorSequenceKeypoint.new(1,t.a)}) end
-
--- GLOW FUNCTION
 local function glow(o,g,d,w) local i=1 while o and o.Parent do tw(o,d or.5,{TextColor3=g[i]}) task.wait(w or.6) i=i%#g+1 end end
 
--- APPLY THEME
 local function aT(t)
 	for k,v in pairs(t) do C[k]=v end
 	local d=.35
@@ -122,14 +117,11 @@ local function aT(t)
 	for _,o in pairs(Reg[6]) do if o and o.Parent then tw(o,d,{BackgroundColor3=t.a}) end end
 	for _,o in pairs(Reg[7]) do if o and o.Parent then tw(o,d,{Color=t.a}) end end
 	for _,o in pairs(Reg[8]) do if o and o.Parent then o.ScrollBarImageColor3=t.a end end
-	-- Update gradient
 	if mnG then mnG.Color=sCS(t) end
-	-- Restart title glows
 	if mdT then task.cancel(mdT) end
 	mdT=task.spawn(glow,mdL,t.mg,.6,.7)
 	if huT then task.cancel(huT) end
 	huT=task.spawn(function() task.wait(.35) glow(huL,t.hg,.6,.7) end)
-	-- Update tab shimmers
 	for _,v in pairs(shT) do
 		if v.on then
 			if v.th then task.cancel(v.th) end
@@ -149,7 +141,6 @@ end
 local sg=ni("ScreenGui",{Name="MuslimHub",ResetOnSpawn=false},pGui)
 local mn=rk(1,ni("Frame",{Size=UDim2.new(0,GW,0,GH),Position=UDim2.new(.5,-GW/2,.5,-GH/2),BackgroundColor3=C.b1,BorderSizePixel=0,ClipsDescendants=true},sg)) cr(mn,12)
 
--- ANIMATED STROKE
 local mnS=ni("UIStroke",{Thickness=1.5,Transparency=.08,Color=WH,ApplyStrokeMode=Enum.ApplyStrokeMode.Border},mn)
 mnG=ni("UIGradient",{Color=sCS(C),Rotation=0},mnS)
 task.spawn(function() while mn and mn.Parent do mnG.Rotation=0 TS:Create(mnG,TweenInfo.new(3.5,Enum.EasingStyle.Linear),{Rotation=360}):Play() task.wait(3.5) end end)
