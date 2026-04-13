@@ -222,42 +222,44 @@ local function GetFlyDirection()
 
     local moveDir = hum.MoveDirection
     
-    -- Add vertical movement from gamepad analog stick (if available)
-    local verticalInput = 0
-    pcall(function()
-        -- Try to get gamepad analog stick input
-        for i = 1, 4 do
-            local gamepad = Enum.UserInputType["Gamepad" .. i]
-            
-            -- Try left stick Y for vertical (some games support this)
-            local thumbstick1 = UserInputService:GetGamepadState(gamepad, Enum.KeyCode.Thumbstick1)
-            if thumbstick1 and thumbstick1.Y then
-                verticalInput = thumbstick1.Y
-                break
-            end
-            
-            -- Try right stick Y as fallback
-            local thumbstick2 = UserInputService:GetGamepadState(gamepad, Enum.KeyCode.Thumbstick2)
-            if thumbstick2 and thumbstick2.Y then
-                verticalInput = thumbstick2.Y
-                break
-            end
-        end
-    end)
-    
-    -- Clamp vertical input
-    verticalInput = math.clamp(verticalInput, -1, 1)
-    
-    -- Add vertical movement if significant input detected
-    if math.abs(verticalInput) > 0.1 then
-        moveDir = moveDir + Vector3.new(0, verticalInput, 0)
-    end
-    
     if moveDir.Magnitude > 0 then
         moveDir = moveDir.Unit
     end
 
     return moveDir
+end
+
+local function GetVerticalInput()
+    local verticalInput = 0
+    
+    pcall(function()
+        -- Check all 4 gamepads
+        for i = 1, 4 do
+            local gamepad = Enum.UserInputType["Gamepad" .. i]
+            
+            -- Check left thumbstick Y
+            pcall(function()
+                local state = UserInputService:GetGamepadState(gamepad, Enum.KeyCode.Thumbstick1)
+                if state and state.Y then
+                    verticalInput = state.Y
+                end
+            end)
+            
+            -- Check right thumbstick Y as fallback
+            if verticalInput == 0 then
+                pcall(function()
+                    local state = UserInputService:GetGamepadState(gamepad, Enum.KeyCode.Thumbstick2)
+                    if state and state.Y then
+                        verticalInput = state.Y
+                    end
+                end)
+            end
+            
+            if verticalInput ~= 0 then break end
+        end
+    end)
+    
+    return math.clamp(verticalInput, -1, 1)
 end
 
 local function LerpFly(a, b, t)
@@ -334,6 +336,13 @@ function AutoLockAimbot:InitializeFly()
             end
 
             local velocity = (dir * FlyState.CurrentSpeed) + jitter
+            
+            -- Add vertical movement from analog stick
+            local verticalInput = GetVerticalInput()
+            if math.abs(verticalInput) > 0.1 then
+                velocity = velocity + Vector3.new(0, verticalInput * FlySettings.FlySpeed, 0)
+            end
+            
             if FlySettings.FakeGravity then
                 velocity = velocity + Vector3.new(0, FlyGravityOffset, 0)
             end
