@@ -220,8 +220,38 @@ local function GetFlyDirection()
     local hum = GetHumanoid()
     if not hum then return Vector3.zero end
 
-    -- Use only humanoid.MoveDirection from game joystick
     local moveDir = hum.MoveDirection
+    
+    -- Add vertical movement from gamepad analog stick (if available)
+    local verticalInput = 0
+    pcall(function()
+        -- Try to get gamepad analog stick input
+        for i = 1, 4 do
+            local gamepad = Enum.UserInputType["Gamepad" .. i]
+            
+            -- Try left stick Y for vertical (some games support this)
+            local thumbstick1 = UserInputService:GetGamepadState(gamepad, Enum.KeyCode.Thumbstick1)
+            if thumbstick1 and thumbstick1.Y then
+                verticalInput = thumbstick1.Y
+                break
+            end
+            
+            -- Try right stick Y as fallback
+            local thumbstick2 = UserInputService:GetGamepadState(gamepad, Enum.KeyCode.Thumbstick2)
+            if thumbstick2 and thumbstick2.Y then
+                verticalInput = thumbstick2.Y
+                break
+            end
+        end
+    end)
+    
+    -- Clamp vertical input
+    verticalInput = math.clamp(verticalInput, -1, 1)
+    
+    -- Add vertical movement if significant input detected
+    if math.abs(verticalInput) > 0.1 then
+        moveDir = moveDir + Vector3.new(0, verticalInput, 0)
+    end
     
     if moveDir.Magnitude > 0 then
         moveDir = moveDir.Unit
