@@ -351,6 +351,21 @@ function AutoLockAimbot:InitializeFly()
         local hum = char:WaitForChild("Humanoid")
         hum.PlatformStand = false
         
+        -- Jump to fly up feature (Setup BEFORE enabling fly)
+        if isMobile then
+            pcall(function()
+                hum.StateChanged:Connect(function(oldState, newState)
+                    if not FlyState.Flying then return end
+                    -- When player taps jump button while flying, go up
+                    if newState == Enum.HumanoidStateType.Jumping then
+                        FlyState.GoingUp = true
+                        task.wait(0.15)
+                        FlyState.GoingUp = false
+                    end
+                end)
+            end)
+        end
+        
         task.wait(0.2)
         
         -- Reapply fly if it was enabled
