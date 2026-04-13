@@ -1818,7 +1818,6 @@ speedRowList.SortOrder = Enum.SortOrder.LayoutOrder
 speedRowList.Padding = UDim.new(0, 6)
 speedRowList.Parent = speedRow
 
--- WALK SPEED CARD (Half Width)
 createToggleSliderCard(
     speedRow,
     "Walk Speed",
@@ -1849,7 +1848,6 @@ createToggleSliderCard(
     0, 100, 16
 )
 
--- FLY SPEED CARD (Half Width)
 createToggleSliderCard(
     speedRow,
     "Fly Speed",
@@ -1872,7 +1870,6 @@ createToggleSliderCard(
     0, 150, 40
 )
 
--- Make both cards half width
 local walkCard = speedRow:FindFirstChild("Walk SpeedCard")
 local flyCard = speedRow:FindFirstChild("Fly SpeedCard")
 
