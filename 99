@@ -56,8 +56,6 @@ local FlyState = {
     Flying = false,
     FlyEnabled = false,
     Boosting = false,
-    GoingUp = false,
-    GoingDown = false,
     CurrentSpeed = 0,
 }
 
@@ -219,21 +217,12 @@ local function RemoveFlyParts()
 end
 
 local function GetFlyDirection()
-    local root = GetRootPart()
     local hum = GetHumanoid()
-    if not root or not hum then return Vector3.zero end
+    if not hum then return Vector3.zero end
 
-    -- Use humanoid.MoveDirection for both mobile joystick and PC
+    -- Use only humanoid.MoveDirection from game joystick
     local moveDir = hum.MoveDirection
     
-    -- Add vertical movement
-    if FlyState.GoingUp then
-        moveDir = moveDir + Vector3.new(0, 1, 0)
-    end
-    if FlyState.GoingDown then
-        moveDir = moveDir - Vector3.new(0, 1, 0)
-    end
-
     if moveDir.Magnitude > 0 then
         moveDir = moveDir.Unit
     end
@@ -324,7 +313,7 @@ function AutoLockAimbot:InitializeFly()
                 if pos.Y > FlySettings.MaxHeight then
                     velocity = Vector3.new(velocity.X, -5, velocity.Z)
                 end
-                if pos.Y < FlySettings.MinHeight and FlyState.GoingDown then
+                if pos.Y < FlySettings.MinHeight and velocity.Y < 0 then
                     velocity = Vector3.new(velocity.X, 0, velocity.Z)
                 end
             end
@@ -343,28 +332,11 @@ function AutoLockAimbot:InitializeFly()
         task.wait(0.5)
         FlyState.Flying = false
         FlyState.Boosting = false
-        FlyState.GoingUp = false
-        FlyState.GoingDown = false
         FlyState.CurrentSpeed = 0
         RemoveFlyParts()
 
         local hum = char:WaitForChild("Humanoid")
         hum.PlatformStand = false
-        
-        -- Jump to fly up feature (Setup BEFORE enabling fly)
-        if isMobile then
-            pcall(function()
-                hum.StateChanged:Connect(function(oldState, newState)
-                    if not FlyState.Flying then return end
-                    -- When player taps jump button while flying, go up
-                    if newState == Enum.HumanoidStateType.Jumping then
-                        FlyState.GoingUp = true
-                        task.wait(0.15)
-                        FlyState.GoingUp = false
-                    end
-                end)
-            end)
-        end
         
         task.wait(0.2)
         
@@ -594,37 +566,6 @@ function AutoLockAimbot:Initialize()
 end
 
 AutoLockAimbot:Initialize()
-
--- ═══════════════════════════════════════════════════════════
--- FLY KEYBINDS (PC Only)
--- ═══════════════════════════════════════════════════════════
-
-if not isMobile then
-    pcall(function()
-        UserInputService.InputBegan:Connect(function(input, gp)
-            if gp then return end
-            if input.KeyCode == Enum.KeyCode.F then
-                if FlyState.FlyEnabled then DisableFly() else EnableFly() end
-            elseif input.KeyCode == Enum.KeyCode.Space then
-                FlyState.GoingUp = true
-            elseif input.KeyCode == Enum.KeyCode.LeftControl then
-                FlyState.GoingDown = true
-            elseif input.KeyCode == Enum.KeyCode.LeftShift then
-                FlyState.Boosting = true
-            end
-        end)
-
-        UserInputService.InputEnded:Connect(function(input)
-            if input.KeyCode == Enum.KeyCode.Space then
-                FlyState.GoingUp = false
-            elseif input.KeyCode == Enum.KeyCode.LeftControl then
-                FlyState.GoingDown = false
-            elseif input.KeyCode == Enum.KeyCode.LeftShift then
-                FlyState.Boosting = false
-            end
-        end)
-    end)
-end
 
 -- ═══════════════════════════════════════════════════════════
 -- GUI CODE
