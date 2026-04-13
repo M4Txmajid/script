@@ -42,8 +42,8 @@ local WalkSpeedEnabled = false
 local FlySettings = {
     FlySpeed = 40,
     BoostSpeed = 80,
-    Acceleration = 0.15,
-    Deceleration = 0.1,
+    Acceleration = 0.9,
+    Deceleration = 0.5,
     FakeGravity = true,
     RandomJitter = true,
     JitterAmount = 0.05,
@@ -220,24 +220,13 @@ end
 
 local function GetFlyDirection()
     local root = GetRootPart()
-    if not root then return Vector3.zero end
+    local hum = GetHumanoid()
+    if not root or not hum then return Vector3.zero end
 
-    local camCF = Camera.CFrame
-    local moveDir = Vector3.zero
-
-    if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-        moveDir = moveDir + camCF.LookVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-        moveDir = moveDir - camCF.LookVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-        moveDir = moveDir - camCF.RightVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-        moveDir = moveDir + camCF.RightVector
-    end
-
+    -- Use humanoid.MoveDirection for both mobile joystick and PC
+    local moveDir = hum.MoveDirection
+    
+    -- Add vertical movement
     if FlyState.GoingUp then
         moveDir = moveDir + Vector3.new(0, 1, 0)
     end
